@@ -77,14 +77,18 @@ def build_psd2_qc_extension() -> bytes:
     return der_encoder.encode(qc_statements)
 
 
-def make_name(cn, org="TestTPP", country="DE", serial=None):
+# OID 2.5.4.97 = organizationIdentifier (mandatory for PSD2 eIDAS certs)
+OID_ORGANIZATION_IDENTIFIER = ObjectIdentifier("2.5.4.97")
+
+
+def make_name(cn, org="TestTPP", country="DE", org_id=None):
     attrs = [
         x509.NameAttribute(NameOID.COUNTRY_NAME, country),
         x509.NameAttribute(NameOID.ORGANIZATION_NAME, org),
         x509.NameAttribute(NameOID.COMMON_NAME, cn),
     ]
-    if serial:
-        attrs.append(x509.NameAttribute(NameOID.SERIAL_NUMBER, serial))
+    if org_id:
+        attrs.append(x509.NameAttribute(OID_ORGANIZATION_IDENTIFIER, org_id))
     return x509.Name(attrs)
 
 
@@ -153,7 +157,7 @@ print(f"  Written: {chain_path}")
 # ── 3. END-ENTITY PSD2 CERT (eIDAS QWAC) ────────────────────────────────────
 print("\n[3/3] Generating eIDAS PSD2 end-entity certificate...")
 ee_key = new_key()
-ee_name = make_name("AK-Test-TPP", serial="PSDDE-BAFIN-19337")
+ee_name = make_name("testAK-tpp.unicredit.eu", org_id="PSDDE-BAFIN-19337")
 ee_cert = (
     x509.CertificateBuilder()
     .subject_name(ee_name)
@@ -172,7 +176,7 @@ ee_cert = (
         ExtendedKeyUsageOID.CLIENT_AUTH,
         ExtendedKeyUsageOID.SERVER_AUTH,
     ]), critical=False)
-    .add_extension(x509.SubjectAlternativeName([x509.DNSName("AK-Test-TPP")]), critical=False)
+    .add_extension(x509.SubjectAlternativeName([x509.DNSName("testAK-tpp.unicredit.eu")]), critical=False)
     .add_extension(x509.SubjectKeyIdentifier.from_public_key(ee_key.public_key()), critical=False)
     .add_extension(x509.AuthorityKeyIdentifier.from_issuer_public_key(inter_key.public_key()), critical=False)
     .add_extension(
