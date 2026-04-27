@@ -25,8 +25,11 @@ from pyasn1.codec.der import encoder as der_encoder
 CERTS_DIR = Path("certs")
 CERTS_DIR.mkdir(exist_ok=True)
 
-# PSD2 OIDs
+# PSD2 / ETSI OIDs
 OID_QC_STATEMENTS  = "1.3.6.1.5.5.7.1.3"   # id-pe-qcStatements
+OID_QC_COMPLIANCE  = "0.4.0.1862.1.1"        # id-etsi-qcs-QcCompliance
+OID_QC_TYPE        = "0.4.0.1862.1.6"        # id-etsi-qcs-QcType
+OID_QCT_WEB        = "0.4.0.1862.1.6.3"      # id-etsi-qct-web (QWAC)
 OID_PSD2_STATEMENT = "0.4.0.19495.2"         # id-etsi-qcs-PSD2Statement
 OID_PSP_AI         = "0.4.0.19495.1.2"       # Account Information SP
 
@@ -50,11 +53,25 @@ def save(path, obj):
     print(f"  Written: {path}")
 
 
+def _oid(dotted: str):
+    return univ.ObjectIdentifier([int(x) for x in dotted.split(".")])
+
+
 def build_psd2_qc_extension() -> bytes:
+    # Statement 1: QcCompliance — no info field, just the OID
+    stmt_compliance = univ.Sequence()
+    stmt_compliance.setComponentByPosition(0, _oid(OID_QC_COMPLIANCE))
+
+    # Statement 2: QcType = id-etsi-qct-web (QWAC)
+    qc_type_value = univ.Sequence()
+    qc_type_value.setComponentByPosition(0, _oid(OID_QCT_WEB))
+    stmt_qc_type = univ.Sequence()
+    stmt_qc_type.setComponentByPosition(0, _oid(OID_QC_TYPE))
+    stmt_qc_type.setComponentByPosition(1, qc_type_value)
+
+    # Statement 3: PSD2Statement — roles + NCA name + NCA ID
     role = univ.Sequence()
-    role.setComponentByPosition(0, univ.ObjectIdentifier(
-        [int(x) for x in OID_PSP_AI.split(".")]
-    ))
+    role.setComponentByPosition(0, _oid(OID_PSP_AI))
     role.setComponentByPosition(1, char.UTF8String("PSP_AI"))
 
     roles = univ.SequenceOf()
@@ -65,14 +82,15 @@ def build_psd2_qc_extension() -> bytes:
     psd2_qc.setComponentByPosition(1, char.UTF8String("BaFin"))
     psd2_qc.setComponentByPosition(2, char.UTF8String("PSDDE-BAFIN-19337"))
 
-    statement = univ.Sequence()
-    statement.setComponentByPosition(0, univ.ObjectIdentifier(
-        [int(x) for x in OID_PSD2_STATEMENT.split(".")]
-    ))
-    statement.setComponentByPosition(1, psd2_qc)
+    stmt_psd2 = univ.Sequence()
+    stmt_psd2.setComponentByPosition(0, _oid(OID_PSD2_STATEMENT))
+    stmt_psd2.setComponentByPosition(1, psd2_qc)
 
+    # Combine all three statements
     qc_statements = univ.SequenceOf()
-    qc_statements.setComponentByPosition(0, statement)
+    qc_statements.setComponentByPosition(0, stmt_compliance)
+    qc_statements.setComponentByPosition(1, stmt_qc_type)
+    qc_statements.setComponentByPosition(2, stmt_psd2)
 
     return der_encoder.encode(qc_statements)
 
