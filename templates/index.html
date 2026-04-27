@@ -1,14 +1,31 @@
 {% extends "base.html" %}
 {% block content %}
-<article style="max-width:480px;margin:4rem auto;text-align:center;">
-  <h2>UniCredit Open Banking</h2>
-  <p>Connect your UniCredit account to view balances and transactions via PSD2 AIS APIs.</p>
-  {% if session.consent_id %}
-    <a href="{{ url_for('accounts') }}" role="button">View Accounts</a>
-    &nbsp;
-    <a href="{{ url_for('disconnect') }}" role="button" class="secondary">Disconnect</a>
-  {% else %}
-    <a href="{{ url_for('connect') }}" role="button">Connect to UniCredit</a>
-  {% endif %}
-</article>
+<h2>PSD2 Open Banking</h2>
+<p>Connect to a bank sandbox to view accounts, balances, and transactions.</p>
+
+<div style="display:flex;gap:2rem;flex-wrap:wrap;margin-top:2rem;">
+
+  <article style="flex:1;min-width:260px;">
+    <h3>UniCredit</h3>
+    <p>Connects via mTLS with eIDAS QWAC certificate. Requires sandbox onboarding.</p>
+    {% if session.bank == "unicredit" %}
+      <a href="{{ url_for('accounts') }}" role="button">View Accounts</a>
+      <a href="{{ url_for('disconnect') }}" role="button" class="secondary" style="margin-top:0.5rem;">Disconnect</a>
+    {% else %}
+      <a href="{{ url_for('unicredit_connect') }}" role="button">Connect to UniCredit</a>
+    {% endif %}
+  </article>
+
+  <article style="flex:1;min-width:260px;">
+    <h3>Commerzbank</h3>
+    <p>Connects via OAuth2 sandbox token. No certificate required — ready to use immediately.</p>
+    {% if session.bank == "commerzbank" %}
+      <a href="{{ url_for('accounts') }}" role="button">View Accounts</a>
+      <a href="{{ url_for('disconnect') }}" role="button" class="secondary" style="margin-top:0.5rem;">Disconnect</a>
+    {% else %}
+      <a href="{{ url_for('commerzbank_connect') }}" role="button">Connect to Commerzbank</a>
+    {% endif %}
+  </article>
+
+</div>
 {% endblock %}

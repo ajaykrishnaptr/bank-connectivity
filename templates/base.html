@@ -11,7 +11,8 @@
     <nav>
       <ul><li><strong>UniCredit AIS</strong></li></ul>
       <ul>
-        {% if session.consent_id %}
+        {% if session.bank %}
+        <li><small>{{ session.bank | capitalize }}</small></li>
         <li><a href="{{ url_for('accounts') }}">Accounts</a></li>
         <li><a href="{{ url_for('disconnect') }}">Disconnect</a></li>
         {% endif %}
