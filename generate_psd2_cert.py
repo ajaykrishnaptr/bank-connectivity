@@ -197,6 +197,14 @@ ee_cert = (
     .add_extension(x509.SubjectAlternativeName([x509.DNSName("testAK-tpp.unicredit.eu")]), critical=False)
     .add_extension(x509.SubjectKeyIdentifier.from_public_key(ee_key.public_key()), critical=False)
     .add_extension(x509.AuthorityKeyIdentifier.from_issuer_public_key(inter_key.public_key()), critical=False)
+    .add_extension(x509.CRLDistributionPoints([
+        x509.DistributionPoint(
+            full_name=[x509.UniformResourceIdentifier("http://crl.testAK-tpp.unicredit.eu/crl.crl")],
+            relative_name=None,
+            reasons=None,
+            crl_issuer=None,
+        )
+    ]), critical=False)
     .add_extension(
         x509.UnrecognizedExtension(
             oid=ObjectIdentifier(OID_QC_STATEMENTS),
