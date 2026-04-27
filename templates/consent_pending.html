@@ -1,0 +1,11 @@
+{% extends "base.html" %}
+{% block content %}
+<article style="max-width:480px;margin:4rem auto;text-align:center;">
+  <h2>Consent Pending</h2>
+  <p>Consent status: <strong>{{ status }}</strong></p>
+  <p>Please complete the SCA (Strong Customer Authentication) step on the bank's page, then click below.</p>
+  <a href="{{ url_for('callback') }}" role="button">Check Again</a>
+  &nbsp;
+  <a href="{{ url_for('index') }}" role="button" class="secondary">Cancel</a>
+</article>
+{% endblock %}

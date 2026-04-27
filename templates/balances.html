@@ -1,0 +1,29 @@
+{% extends "base.html" %}
+{% block content %}
+<h2>Balances</h2>
+<p><a href="{{ url_for('accounts') }}">← Back to Accounts</a></p>
+{% if balances %}
+<table>
+  <thead>
+    <tr>
+      <th>Type</th>
+      <th>Amount</th>
+      <th>Currency</th>
+      <th>Date</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for b in balances %}
+    <tr>
+      <td>{{ b.get("balanceType", "—") }}</td>
+      <td>{{ b.get("balanceAmount", {}).get("amount", "—") }}</td>
+      <td>{{ b.get("balanceAmount", {}).get("currency", "—") }}</td>
+      <td>{{ b.get("referenceDate", "—") }}</td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% else %}
+<p>No balance data available.</p>
+{% endif %}
+{% endblock %}

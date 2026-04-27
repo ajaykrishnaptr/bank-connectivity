@@ -1,0 +1,14 @@
+{% extends "base.html" %}
+{% block content %}
+<article style="max-width:480px;margin:4rem auto;text-align:center;">
+  <h2>UniCredit Open Banking</h2>
+  <p>Connect your UniCredit account to view balances and transactions via PSD2 AIS APIs.</p>
+  {% if session.consent_id %}
+    <a href="{{ url_for('accounts') }}" role="button">View Accounts</a>
+    &nbsp;
+    <a href="{{ url_for('disconnect') }}" role="button" class="secondary">Disconnect</a>
+  {% else %}
+    <a href="{{ url_for('connect') }}" role="button">Connect to UniCredit</a>
+  {% endif %}
+</article>
+{% endblock %}

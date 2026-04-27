@@ -1,0 +1,32 @@
+{% extends "base.html" %}
+{% block content %}
+<h2>Accounts</h2>
+{% if accounts %}
+<table>
+  <thead>
+    <tr>
+      <th>IBAN</th>
+      <th>Name</th>
+      <th>Currency</th>
+      <th>Actions</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for acc in accounts %}
+    <tr>
+      <td>{{ acc.get("iban", acc.get("resourceId", "—")) }}</td>
+      <td>{{ acc.get("name", acc.get("ownerName", "—")) }}</td>
+      <td>{{ acc.get("currency", "—") }}</td>
+      <td>
+        <a href="{{ url_for('balances', account_id=acc['resourceId']) }}">Balances</a>
+        &nbsp;|&nbsp;
+        <a href="{{ url_for('transactions', account_id=acc['resourceId']) }}">Transactions</a>
+      </td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% else %}
+<p>No accounts found.</p>
+{% endif %}
+{% endblock %}
