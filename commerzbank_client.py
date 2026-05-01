@@ -11,8 +11,8 @@ load_dotenv()
 BASE_URL  = "https://api-sandbox.commerzbank.com/accounts-api/29/v1"
 TOKEN_URL = "https://api-sandbox.commerzbank.com/auth/realms/sandbox/protocol/openid-connect/token"
 
-SANDBOX_CONSENT = "VALID_RECURRING_PSD2_ALL_ACCOUNTS_WO"
 SANDBOX_PSU_ID  = "DE80480800200405423400"
+SANDBOX_CONSENT = "VALID_RECURRING_PSD2_ALL_ACCOUNTS_WO"
 
 CLIENT_ID     = os.getenv("CB_CLIENT_ID", "")
 CLIENT_SECRET = os.getenv("CB_CLIENT_SECRET", "")
@@ -31,7 +31,7 @@ def get_oauth_token() -> str:
     """Return a valid access token, fetching or refreshing as needed."""
     global _token_cache
     token, expiry = _token_cache
-    if token and time.time() < expiry - 30:  # 30s buffer before expiry
+    if token and time.time() < expiry - 30:
         return token
 
     resp = requests.post(TOKEN_URL, data={
@@ -70,8 +70,9 @@ def _call(method, url, **kwargs):
         raise CommerzbankApiError(f"Request failed: {e}")
 
 
-def create_consent(token: str):
-    valid_until = (datetime.today() + timedelta(days=1)).strftime("%Y-%m-%d")
+def create_consent(token: str, redirect_uri: str) -> dict:
+    """Create an AIS consent. Returns full response including consentId and SCA redirect link."""
+    valid_until = (datetime.today() + timedelta(days=90)).strftime("%Y-%m-%d")
     body = {
         "access": {"allPsd2": "allAccounts"},
         "recurringIndicator": True,
@@ -79,25 +80,35 @@ def create_consent(token: str):
         "frequencyPerDay": "4",
         "combinedServiceIndicator": False,
     }
-    return _call("POST", f"{BASE_URL}/consents", headers=_headers(token), json=body)
+    headers = _headers(token)
+    headers["TPP-Redirect-URI"] = redirect_uri
+    headers["Content-Type"] = "application/json"
+    return _call("POST", f"{BASE_URL}/consents", headers=headers, json=body)
 
 
-def get_accounts(token: str):
+def get_consent_status(token: str, consent_id: str) -> str:
+    """Return the consentStatus string for a given consentId."""
+    data = _call("GET", f"{BASE_URL}/consents/{consent_id}/status",
+                 headers=_headers(token))
+    return data.get("consentStatus", "unknown")
+
+
+def get_accounts(token: str, consent_id: str):
     data = _call("GET", f"{BASE_URL}/accounts",
-                 headers=_headers(token, SANDBOX_CONSENT))
+                 headers=_headers(token, consent_id))
     return data.get("accounts", [])
 
 
-def get_balances(token: str, account_id: str):
+def get_balances(token: str, consent_id: str, account_id: str):
     data = _call("GET", f"{BASE_URL}/accounts/{account_id}/balances",
-                 headers=_headers(token, SANDBOX_CONSENT))
+                 headers=_headers(token, consent_id))
     return data.get("balances", [])
 
 
-def get_transactions(token: str, account_id: str):
+def get_transactions(token: str, consent_id: str, account_id: str):
     date_from = (datetime.today() - timedelta(days=90)).strftime("%Y-%m-%d")
     data = _call("GET", f"{BASE_URL}/accounts/{account_id}/transactions",
-                 headers=_headers(token, SANDBOX_CONSENT),
+                 headers=_headers(token, consent_id),
                  params={"dateFrom": date_from, "bookingStatus": "both"})
     transactions = data.get("transactions", {})
     return {

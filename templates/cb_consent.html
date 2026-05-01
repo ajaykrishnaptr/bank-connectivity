@@ -1,0 +1,25 @@
+{% extends "base.html" %}
+{% block content %}
+<h2>Authorize Account Access</h2>
+<p>The following application is requesting access to your Commerzbank account data:</p>
+
+<article>
+  <h4>AK Open Banking (TPP)</h4>
+  <p><strong>Requested permissions:</strong></p>
+  <ul>
+    <li>View account list</li>
+    <li>View account balances</li>
+    <li>View transaction history (last 90 days)</li>
+  </ul>
+  <p><strong>Validity:</strong> 90 days &nbsp;|&nbsp; <strong>Access frequency:</strong> Up to 4 times per day</p>
+  <p><small>Consent ID: {{ consent_id }}</small></p>
+</article>
+
+<p>By clicking <strong>Authorize</strong>, you confirm this access in accordance with PSD2.</p>
+
+<form method="post" action="{{ url_for('commerzbank_authorize') }}">
+  <input type="hidden" name="consent_id" value="{{ consent_id }}">
+  <button type="submit">Authorize</button>
+  <a href="{{ url_for('index') }}" role="button" class="secondary" style="margin-left:1rem;">Cancel</a>
+</form>
+{% endblock %}
