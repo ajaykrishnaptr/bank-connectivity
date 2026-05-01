@@ -98,12 +98,20 @@ def commerzbank_authorize():
 def nordea_connect():
     try:
         redirect_uri = app.config["NORDEA_REDIRECT_URI"]
-        sca_url = nordea_client.initiate_authorize(redirect_uri)
+        location, state = nordea_client.initiate_authorize(redirect_uri)
         session["bank"] = "nordea"
-        # If using httpbin as redirect, show manual code-entry page after SCA
-        if "httpbin.org" in redirect_uri:
-            return render_template("nordea_code.html", sca_url=sca_url)
-        return redirect(sca_url)
+        session["nordea_state"] = state
+        # Sandbox auto-approves: Location goes straight to redirect_uri with code
+        from urllib.parse import urlparse, parse_qs
+        parsed = urlparse(location)
+        params = parse_qs(parsed.query)
+        if "code" in params:
+            code = params["code"][0]
+            token = nordea_client.exchange_code(code, redirect_uri)
+            session["nordea_token"] = token
+            return redirect(url_for("accounts"))
+        # Production: redirect user to Nordea SCA page
+        return redirect(location)
     except nordea_client.NordeaApiError as e:
         flash(str(e), "error")
         return redirect(url_for("index"))
@@ -113,7 +121,6 @@ def nordea_connect():
 def nordea_callback():
     code = request.args.get("code")
     if not code:
-        # No code yet — show the SCA link + manual entry page
         return render_template("nordea_code.html", sca_url=None)
     try:
         redirect_uri = app.config["NORDEA_REDIRECT_URI"]

@@ -11,7 +11,7 @@ BASE_URL  = "https://api.nordeaopenbanking.com/personal/v5"
 AUTH_URL  = f"{BASE_URL}/authorize"
 TOKEN_URL = f"{BASE_URL}/authorize/token"
 
-SCOPES = "ACCOUNTS_BASIC,ACCOUNTS_BALANCES,ACCOUNTS_DETAILS,ACCOUNTS_TRANSACTIONS"
+SCOPES = ["ACCOUNTS_BASIC", "ACCOUNTS_BALANCES", "ACCOUNTS_DETAILS", "ACCOUNTS_TRANSACTIONS"]
 MOCK_AUTHORIZER_ID = "70311198"  # sandbox fixed test user
 
 CLIENT_ID     = os.getenv("NORDEA_CLIENT_ID", "")
@@ -35,7 +35,6 @@ def _headers(token=None, mock_authorizer=False):
         "X-IBM-Client-Secret": CLIENT_SECRET,
         "Signature": "SKIP_SIGNATURE_VALIDATION_FOR_SANDBOX",
         "X-Nordea-Originating-Date": _originating_date(),
-        "X-Nordea-Originating-Host": "localhost",
         "X-Request-ID": str(uuid.uuid4()),
         "Accept": "application/json",
     }
@@ -58,9 +57,15 @@ def _call(method, url, **kwargs):
         raise NordeaApiError(f"Request failed: {e}")
 
 
-def initiate_authorize(redirect_uri: str) -> str:
-    """POST to Nordea authorize — returns the SCA redirect URL for the customer."""
-    data = _call("POST", AUTH_URL,
+def initiate_authorize(redirect_uri: str) -> tuple[str, str]:
+    """POST to Nordea authorize. Returns (location_url, state).
+
+    In sandbox the mock authorizer auto-approves and Nordea immediately
+    redirects to redirect_uri with code. We use allow_redirects=False to
+    capture the Location header rather than following it.
+    """
+    state = str(uuid.uuid4())
+    resp = requests.post(AUTH_URL,
         headers={**_headers(mock_authorizer=True), "Content-Type": "application/json"},
         json={
             "client_id": CLIENT_ID,
@@ -69,17 +74,17 @@ def initiate_authorize(redirect_uri: str) -> str:
             "country": COUNTRY,
             "response_type": "code",
             "duration": 129600,
-        }
+            "state": state,
+        },
+        allow_redirects=False,
+        timeout=15,
     )
-    # Nordea wraps response; redirect URL may be at different keys
-    redirect_url = (
-        data.get("redirect_uri")
-        or data.get("redirectUri")
-        or data.get("response", {}).get("redirect_uri", "")
-    )
-    if not redirect_url:
-        raise NordeaApiError(f"No redirect URL in authorize response: {data}")
-    return redirect_url
+    if resp.status_code not in (200, 201, 302):
+        raise NordeaApiError(f"Authorize failed {resp.status_code}: {resp.text[:300]}", status_code=resp.status_code)
+    location = resp.headers.get("Location") or resp.headers.get("location", "")
+    if not location:
+        raise NordeaApiError(f"No Location header in authorize response: {resp.text[:300]}")
+    return location, state
 
 
 def exchange_code(code: str, redirect_uri: str) -> str:
@@ -103,7 +108,7 @@ def exchange_code(code: str, redirect_uri: str) -> str:
 def _extract_iban(account: dict) -> str:
     for num in account.get("account_numbers", []):
         if num.get("_type") == "IBAN":
-            return num.get("_value", "")
+            return num.get("value", "")
     return account.get("_id", "")
 
 
@@ -141,10 +146,8 @@ def get_balances(token: str, account_id: str) -> list:
 
 
 def get_transactions(token: str, account_id: str) -> dict:
-    date_from = (datetime.today() - timedelta(days=90)).strftime("%Y-%m-%d")
     data = _call("GET", f"{BASE_URL}/accounts/{account_id}/transactions",
-        headers=_headers(token),
-        params={"from_date": date_from}
+        headers=_headers(token)
     )
     raw = data.get("response", {}).get("transactions", [])
     booked = []
@@ -157,9 +160,9 @@ def get_transactions(token: str, account_id: str) -> dict:
                 "amount": str(t.get("amount", "")),
                 "currency": t.get("currency", ""),
             },
-            "creditorName": t.get("creditor_name", ""),
-            "debtorName": t.get("debtor_name", ""),
-            "remittanceInformationUnstructured": t.get("message", t.get("text", "")),
+            "creditorName": t.get("counterparty_name", ""),
+            "debtorName": t.get("counterparty_name", ""),
+            "remittanceInformationUnstructured": t.get("message", t.get("narrative", "")),
         }
         if t.get("booking_date"):
             booked.append(normalized)
