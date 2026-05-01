@@ -1,4 +1,5 @@
 import os
+import time
 import uuid
 from datetime import datetime, timedelta
 
@@ -7,17 +8,17 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-BASE_URL   = "https://api-sandbox.commerzbank.com/accounts-api/29/v1"
-TOKEN_URL  = "https://api-sandbox.commerzbank.com/oauth2/token"
+BASE_URL  = "https://api-sandbox.commerzbank.com/accounts-api/29/v1"
+TOKEN_URL = "https://api-sandbox.commerzbank.com/auth/realms/sandbox/protocol/openid-connect/token"
 
-# Sandbox fixed values — token endpoint always returns VALID_A_TOKEN
-# when called with these fixed parameters + your client_id
-SANDBOX_CONSENT       = "VALID_RECURRING_PSD2_ALL_ACCOUNTS_WO"
-SANDBOX_PSU_ID        = "DE80480800200405423400"
-SANDBOX_CODE          = "VALID_CODE"
-SANDBOX_CODE_VERIFIER = "VALID_CODE_VERIFIER"
+SANDBOX_CONSENT = "VALID_RECURRING_PSD2_ALL_ACCOUNTS_WO"
+SANDBOX_PSU_ID  = "DE80480800200405423400"
 
-CLIENT_ID = os.getenv("CB_CLIENT_ID", "")
+CLIENT_ID     = os.getenv("CB_CLIENT_ID", "")
+CLIENT_SECRET = os.getenv("CB_CLIENT_SECRET", "")
+
+# Module-level token cache: (access_token, expiry_timestamp)
+_token_cache: tuple[str, float] = ("", 0.0)
 
 
 class CommerzbankApiError(Exception):
@@ -27,15 +28,23 @@ class CommerzbankApiError(Exception):
 
 
 def get_oauth_token() -> str:
-    """Exchange fixed sandbox code for OAuth token. Returns VALID_A_TOKEN."""
+    """Return a valid access token, fetching or refreshing as needed."""
+    global _token_cache
+    token, expiry = _token_cache
+    if token and time.time() < expiry - 30:  # 30s buffer before expiry
+        return token
+
     resp = requests.post(TOKEN_URL, data={
-        "grant_type": "authorization_code",
+        "grant_type": "client_credentials",
         "client_id": CLIENT_ID,
-        "code": SANDBOX_CODE,
-        "code_verifier": SANDBOX_CODE_VERIFIER,
-    }, timeout=15)
+        "client_secret": CLIENT_SECRET,
+    }, headers={"Content-Type": "application/x-www-form-urlencoded"}, timeout=15)
     resp.raise_for_status()
-    return resp.json().get("access_token", "")
+    data = resp.json()
+    token = data["access_token"]
+    expires_in = data.get("expires_in", 900)
+    _token_cache = (token, time.time() + expires_in)
+    return token
 
 
 def _headers(token, consent_id=None):

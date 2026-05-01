@@ -60,10 +60,8 @@ def callback():
 @app.route("/commerzbank/connect")
 def commerzbank_connect():
     try:
-        token = commerzbank_client.get_oauth_token()
-        commerzbank_client.create_consent(token)
+        commerzbank_client.get_oauth_token()  # validates credentials on connect
         session["bank"] = "commerzbank"
-        session["cb_token"] = token
         return redirect(url_for("accounts"))
     except commerzbank_client.CommerzbankApiError as e:
         flash(str(e), "error")
@@ -80,7 +78,7 @@ def accounts():
         return redirect(url_for("index"))
     try:
         if bank == "commerzbank":
-            account_list = commerzbank_client.get_accounts(session["cb_token"])
+            account_list = commerzbank_client.get_accounts(commerzbank_client.get_oauth_token())
         else:
             if not session.get("consent_id"):
                 flash("No active consent. Please connect first.", "warning")
@@ -102,7 +100,7 @@ def balances(account_id):
         return redirect(url_for("index"))
     try:
         if bank == "commerzbank":
-            balance_list = commerzbank_client.get_balances(session["cb_token"], account_id)
+            balance_list = commerzbank_client.get_balances(commerzbank_client.get_oauth_token(), account_id)
         else:
             balance_list = psd2_client.get_balances(
                 app.config["SANDBOX_BASE_URL"], session["consent_id"], account_id
@@ -121,7 +119,7 @@ def transactions(account_id):
         return redirect(url_for("index"))
     try:
         if bank == "commerzbank":
-            txn_data = commerzbank_client.get_transactions(session["cb_token"], account_id)
+            txn_data = commerzbank_client.get_transactions(commerzbank_client.get_oauth_token(), account_id)
         else:
             txn_data = psd2_client.get_transactions(
                 app.config["SANDBOX_BASE_URL"], session["consent_id"], account_id
