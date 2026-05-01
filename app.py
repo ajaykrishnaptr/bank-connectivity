@@ -96,18 +96,22 @@ def commerzbank_authorize():
 
 @app.route("/nordea/connect")
 def nordea_connect():
+    session["bank"] = "nordea"
+    return render_template("nordea_consent.html", country=nordea_client.COUNTRY)
+
+
+@app.route("/nordea/authorize", methods=["POST"])
+def nordea_authorize():
     try:
+        from urllib.parse import urlparse, parse_qs
         redirect_uri = app.config["NORDEA_REDIRECT_URI"]
         location, state = nordea_client.initiate_authorize(redirect_uri)
-        session["bank"] = "nordea"
         session["nordea_state"] = state
-        # Sandbox auto-approves: Location goes straight to redirect_uri with code
-        from urllib.parse import urlparse, parse_qs
         parsed = urlparse(location)
         params = parse_qs(parsed.query)
         if "code" in params:
-            code = params["code"][0]
-            token = nordea_client.exchange_code(code, redirect_uri)
+            # Sandbox: mock authorizer auto-approved, code already in Location
+            token = nordea_client.exchange_code(params["code"][0], redirect_uri)
             session["nordea_token"] = token
             return redirect(url_for("accounts"))
         # Production: redirect user to Nordea SCA page

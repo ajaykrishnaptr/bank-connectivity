@@ -1,0 +1,24 @@
+{% extends "base.html" %}
+{% block content %}
+<h2>Authorize Account Access</h2>
+<p>The following application is requesting access to your Nordea account data:</p>
+
+<article>
+  <h4>AK Open Banking (TPP)</h4>
+  <p><strong>Requested permissions:</strong></p>
+  <ul>
+    <li>View account list</li>
+    <li>View account balances</li>
+    <li>View account details</li>
+    <li>View transaction history</li>
+  </ul>
+  <p><strong>Validity:</strong> 90 days &nbsp;|&nbsp; <strong>Country:</strong> {{ country }}</p>
+</article>
+
+<p>By clicking <strong>Authorize</strong>, you will be directed to Nordea to confirm this access in accordance with PSD2.</p>
+
+<form method="post" action="{{ url_for('nordea_authorize') }}">
+  <button type="submit">Authorize</button>
+  <a href="{{ url_for('index') }}" role="button" class="secondary" style="margin-left:1rem;">Cancel</a>
+</form>
+{% endblock %}
