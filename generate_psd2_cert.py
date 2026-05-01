@@ -209,7 +209,7 @@ ee_cert = (
     ]), critical=False)
     .add_extension(x509.CRLDistributionPoints([
         x509.DistributionPoint(
-            full_name=[x509.UniformResourceIdentifier("http://crl.testAK-tpp.unicredit.eu/crl.crl")],
+            full_name=[x509.UniformResourceIdentifier("https://ajaykrishnaptr.github.io/pki-crl/crl.crl")],
             relative_name=None,
             reasons=None,
             crl_issuer=None,
@@ -227,7 +227,22 @@ ee_cert = (
 save(CERTS_DIR / "eIDAS_test.key", ee_key)
 save(CERTS_DIR / "eIDAS_test.crt", ee_cert)
 
+# ── 4. CRL ───────────────────────────────────────────────────────────────────
+print("\n[4/4] Generating CRL...")
+crl = (
+    x509.CertificateRevocationListBuilder()
+    .issuer_name(inter_name)
+    .last_update(now())
+    .next_update(now() + datetime.timedelta(days=30))
+    .sign(inter_key, hashes.SHA256(), default_backend())
+)
+crl_path = CERTS_DIR / "crl.crl"
+with open(crl_path, "wb") as f:
+    f.write(crl.public_bytes(serialization.Encoding.DER))
+print(f"  Written: {crl_path}")
+
 print("\nDone. Summary:")
 print("  Submit to UniCredit: certs/chain.crt (trust chain)")
 print("  Use in .env:         CERT_PATH=certs/eIDAS_test.crt")
 print("                       KEY_PATH=certs/eIDAS_test.key")
+print("  CRL hosted at:       https://ajaykrishnaptr.github.io/pki-crl/crl.crl")
