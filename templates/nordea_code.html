@@ -1,0 +1,18 @@
+{% extends "base.html" %}
+{% block content %}
+<h2>Nordea — Authorize Access</h2>
+
+{% if sca_url %}
+<p>Click the link below to authorize on Nordea's sandbox. You will be redirected to httpbin.org — copy the <code>code</code> value from the JSON response and paste it here.</p>
+<p><a href="{{ sca_url }}" target="_blank" role="button">Authorize on Nordea →</a></p>
+<hr>
+{% endif %}
+
+<p>After authorizing, find <code>"args": { "code": "..." }</code> in the httpbin JSON and paste it below:</p>
+
+<form method="get" action="{{ url_for('nordea_callback') }}">
+  <label for="code">Authorization Code</label>
+  <input type="text" id="code" name="code" placeholder="Paste the code from httpbin here" required style="width:100%;">
+  <button type="submit" style="margin-top:1rem;">Exchange Code</button>
+</form>
+{% endblock %}

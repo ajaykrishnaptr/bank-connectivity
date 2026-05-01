@@ -27,5 +27,16 @@
     {% endif %}
   </article>
 
+  <article style="flex:1;min-width:260px;">
+    <h3>Nordea</h3>
+    <p>Connects via OAuth2 authorization code flow. Covers Finland, Sweden, Norway, Denmark.</p>
+    {% if session.bank == "nordea" %}
+      <a href="{{ url_for('accounts') }}" role="button">View Accounts</a>
+      <a href="{{ url_for('disconnect') }}" role="button" class="secondary" style="margin-top:0.5rem;">Disconnect</a>
+    {% else %}
+      <a href="{{ url_for('nordea_connect') }}" role="button">Connect to Nordea</a>
+    {% endif %}
+  </article>
+
 </div>
 {% endblock %}

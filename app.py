@@ -7,6 +7,7 @@ load_dotenv()
 
 import auth
 import commerzbank_client
+import nordea_client
 import psd2_client
 
 app = Flask(__name__)
@@ -14,6 +15,7 @@ app.secret_key = os.getenv("FLASK_SECRET_KEY", "dev-secret")
 app.config["SANDBOX_BASE_URL"] = os.getenv("SANDBOX_BASE_URL", "https://developer.unicredit.eu")
 app.config["REDIRECT_URI"] = os.getenv("REDIRECT_URI", "http://localhost:5000/callback")
 app.config["CB_REDIRECT_URI"] = os.getenv("CB_REDIRECT_URI", "http://localhost:5000/commerzbank/callback")
+app.config["NORDEA_REDIRECT_URI"] = os.getenv("NORDEA_REDIRECT_URI", "http://localhost:5000/nordea/callback")
 
 
 # ── Home ─────────────────────────────────────────────────────────────────────
@@ -90,6 +92,40 @@ def commerzbank_authorize():
         return redirect(url_for("index"))
 
 
+# ── Nordea (OAuth authorization_code + SCA redirect) ─────────────────────────
+
+@app.route("/nordea/connect")
+def nordea_connect():
+    try:
+        redirect_uri = app.config["NORDEA_REDIRECT_URI"]
+        sca_url = nordea_client.initiate_authorize(redirect_uri)
+        session["bank"] = "nordea"
+        # If using httpbin as redirect, show manual code-entry page after SCA
+        if "httpbin.org" in redirect_uri:
+            return render_template("nordea_code.html", sca_url=sca_url)
+        return redirect(sca_url)
+    except nordea_client.NordeaApiError as e:
+        flash(str(e), "error")
+        return redirect(url_for("index"))
+
+
+@app.route("/nordea/callback")
+def nordea_callback():
+    code = request.args.get("code")
+    if not code:
+        # No code yet — show the SCA link + manual entry page
+        return render_template("nordea_code.html", sca_url=None)
+    try:
+        redirect_uri = app.config["NORDEA_REDIRECT_URI"]
+        token = nordea_client.exchange_code(code, redirect_uri)
+        session["bank"] = "nordea"
+        session["nordea_token"] = token
+        return redirect(url_for("accounts"))
+    except nordea_client.NordeaApiError as e:
+        flash(str(e), "error")
+        return redirect(url_for("index"))
+
+
 # ── Shared account views ──────────────────────────────────────────────────────
 
 @app.route("/accounts")
@@ -106,6 +142,12 @@ def accounts():
                 return redirect(url_for("index"))
             account_list = commerzbank_client.get_accounts(
                 commerzbank_client.get_oauth_token(), consent_id)
+        elif bank == "nordea":
+            token = session.get("nordea_token")
+            if not token:
+                flash("No active session. Please connect first.", "warning")
+                return redirect(url_for("index"))
+            account_list = nordea_client.get_accounts(token)
         else:
             if not session.get("consent_id"):
                 flash("No active consent. Please connect first.", "warning")
@@ -113,7 +155,7 @@ def accounts():
             account_list = psd2_client.get_accounts(
                 app.config["SANDBOX_BASE_URL"], session["consent_id"])
         return render_template("accounts.html", accounts=account_list, bank=bank)
-    except (psd2_client.PSD2ApiError, commerzbank_client.CommerzbankApiError) as e:
+    except (psd2_client.PSD2ApiError, commerzbank_client.CommerzbankApiError, nordea_client.NordeaApiError) as e:
         flash(str(e), "error")
         return redirect(url_for("index"))
 
@@ -128,11 +170,13 @@ def balances(account_id):
         if bank == "commerzbank":
             balance_list = commerzbank_client.get_balances(
                 commerzbank_client.get_oauth_token(), session["cb_consent_id"], account_id)
+        elif bank == "nordea":
+            balance_list = nordea_client.get_balances(session["nordea_token"], account_id)
         else:
             balance_list = psd2_client.get_balances(
                 app.config["SANDBOX_BASE_URL"], session["consent_id"], account_id)
         return render_template("balances.html", balances=balance_list, account_id=account_id, bank=bank)
-    except (psd2_client.PSD2ApiError, commerzbank_client.CommerzbankApiError) as e:
+    except (psd2_client.PSD2ApiError, commerzbank_client.CommerzbankApiError, nordea_client.NordeaApiError) as e:
         flash(str(e), "error")
         return redirect(url_for("accounts"))
 
@@ -147,11 +191,13 @@ def transactions(account_id):
         if bank == "commerzbank":
             txn_data = commerzbank_client.get_transactions(
                 commerzbank_client.get_oauth_token(), session["cb_consent_id"], account_id)
+        elif bank == "nordea":
+            txn_data = nordea_client.get_transactions(session["nordea_token"], account_id)
         else:
             txn_data = psd2_client.get_transactions(
                 app.config["SANDBOX_BASE_URL"], session["consent_id"], account_id)
         return render_template("transactions.html", transactions=txn_data, account_id=account_id, bank=bank)
-    except (psd2_client.PSD2ApiError, commerzbank_client.CommerzbankApiError) as e:
+    except (psd2_client.PSD2ApiError, commerzbank_client.CommerzbankApiError, nordea_client.NordeaApiError) as e:
         flash(str(e), "error")
         return redirect(url_for("accounts"))
 
