@@ -1,17 +1,20 @@
 {% extends "base.html" %}
 {% block content %}
 <div class="page-header">
-  <h2>PSD2 Open Banking</h2>
-  <p>Connect to a bank sandbox to view accounts, balances, and transactions.</p>
+  <h2>Connected Banks</h2>
+  <p>Connect your bank accounts. You'll be redirected to your bank to authorise access.</p>
 </div>
 
 <div class="grid grid-3">
 
   {% for bank_id, label, color, desc, connect_url in [
-    ('unicredit',    'UniCredit',    '#c0392b', 'mTLS with eIDAS QWAC certificate. Requires sandbox onboarding.', url_for('unicredit_connect')),
-    ('commerzbank',  'Commerzbank',  '#e67e22', 'OAuth2 sandbox token. No certificate required — ready to use.', url_for('commerzbank_connect')),
-    ('nordea',       'Nordea',       '#3498db', 'OAuth2 authorization code flow. Finland, Sweden, Norway, Denmark.', url_for('nordea_connect'))
+    ('unicredit',   'UniCredit',   '#c0392b', 'mTLS with eIDAS QWAC certificate. Requires sandbox onboarding.', url_for('unicredit_connect')),
+    ('commerzbank', 'Commerzbank', '#e67e22', 'OAuth2 sandbox token. No certificate required — ready to use.',  url_for('commerzbank_connect')),
+    ('nordea',      'Nordea',      '#3498db', 'OAuth2 authorization code flow. Finland, Sweden, Norway, Denmark.', url_for('nordea_connect'))
   ] %}
+
+  {% set conn = connections.get(bank_id) %}
+
   <div class="card" style="border-top: 3px solid {{ color }}">
     <div style="display:flex;align-items:center;gap:.75rem;margin-bottom:1rem">
       <div style="width:40px;height:40px;border-radius:10px;background:{{ color }}18;
@@ -25,17 +28,27 @@
       </div>
     </div>
     <p style="font-size:.8125rem;color:var(--text-2);margin-bottom:1.25rem;line-height:1.5">{{ desc }}</p>
-    {% if session.bank == bank_id %}
+
+    {% if conn and conn.status == 'active' %}
       <div style="display:flex;align-items:center;gap:.5rem;margin-bottom:.75rem">
         <span style="width:8px;height:8px;border-radius:50%;background:var(--green);display:inline-block"></span>
         <span style="font-size:.75rem;font-weight:600;color:var(--green)">Connected</span>
+        <span style="font-size:.7rem;color:var(--text-3);margin-left:auto">
+          {{ conn.connected_at.strftime('%d %b %Y') if conn.connected_at }}
+        </span>
       </div>
-      <a href="{{ url_for('accounts') }}" role="button" style="width:100%;margin-bottom:.5rem">View Accounts</a>
-      <a href="{{ url_for('disconnect') }}" role="button" class="secondary" style="width:100%">Disconnect</a>
+      <a href="{{ url_for('disconnect', bank=bank_id) }}" role="button" class="secondary" style="width:100%">Disconnect</a>
+    {% elif conn and conn.status == 'expired' %}
+      <div style="display:flex;align-items:center;gap:.5rem;margin-bottom:.75rem">
+        <span style="width:8px;height:8px;border-radius:50%;background:#f59e0b;display:inline-block"></span>
+        <span style="font-size:.75rem;font-weight:600;color:#92400e">Token Expired</span>
+      </div>
+      <a href="{{ connect_url }}" role="button" style="width:100%;background:{{ color }};border-color:{{ color }}">Reconnect {{ label }}</a>
     {% else %}
-      <a href="{{ connect_url }}" role="button" style="width:100%;background:{{ color }};border-color:{{ color }}">Connect to {{ label }}</a>
+      <a href="{{ connect_url }}" role="button" style="width:100%;background:{{ color }};border-color:{{ color }}">Connect {{ label }}</a>
     {% endif %}
   </div>
+
   {% endfor %}
 
 </div>

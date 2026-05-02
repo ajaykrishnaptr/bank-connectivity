@@ -4,7 +4,7 @@ from categorize import categorize
 from models import Account, Transaction, db
 
 
-def upsert_accounts(bank: str, account_list: list) -> list:
+def upsert_accounts(bank: str, account_list: list, user_id=None) -> list:
     """Insert or update accounts. Returns the saved Account ORM objects."""
     saved = []
     for a in account_list:
@@ -13,7 +13,7 @@ def upsert_accounts(bank: str, account_list: list) -> list:
             continue
         acc = Account.query.filter_by(bank=bank, resource_id=resource_id).first()
         if acc is None:
-            acc = Account(bank=bank, resource_id=resource_id)
+            acc = Account(bank=bank, resource_id=resource_id, user_id=user_id)
             db.session.add(acc)
         acc.iban       = a.get("iban", "")
         acc.currency   = a.get("currency", "")

@@ -1,8 +1,23 @@
 from datetime import datetime, timezone
 
+from flask_login import UserMixin
 from flask_sqlalchemy import SQLAlchemy
 
 db = SQLAlchemy()
+
+
+class User(UserMixin, db.Model):
+    __tablename__ = "users"
+
+    id            = db.Column(db.Integer, primary_key=True)
+    email         = db.Column(db.String(255), unique=True, nullable=False)
+    password_hash = db.Column(db.String(255), nullable=False)
+    role          = db.Column(db.String(20), nullable=False, default="user")  # "user" | "tpp_admin"
+    created_at    = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
+
+    accounts         = db.relationship("Account", back_populates="user")
+    bank_connections = db.relationship("BankConnection", back_populates="user",
+                                       cascade="all, delete-orphan")
 
 
 class Account(db.Model):
@@ -16,6 +31,7 @@ class Account(db.Model):
     name        = db.Column(db.String(255))
     owner_name  = db.Column(db.String(255))
     fetched_at  = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
+    user_id     = db.Column(db.Integer, db.ForeignKey("users.id"), nullable=True)
 
     __table_args__ = (
         db.UniqueConstraint("bank", "resource_id", name="uq_account_bank_resource"),
@@ -23,6 +39,7 @@ class Account(db.Model):
 
     transactions = db.relationship("Transaction", back_populates="account",
                                    cascade="all, delete-orphan")
+    user         = db.relationship("User", back_populates="accounts")
 
 
 class Transaction(db.Model):
@@ -43,3 +60,21 @@ class Transaction(db.Model):
     fetched_at   = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
 
     account = db.relationship("Account", back_populates="transactions")
+
+
+class BankConnection(db.Model):
+    __tablename__ = "bank_connections"
+
+    id           = db.Column(db.Integer, primary_key=True)
+    user_id      = db.Column(db.Integer, db.ForeignKey("users.id"), nullable=False)
+    bank         = db.Column(db.String(50), nullable=False)
+    access_token = db.Column(db.Text, nullable=True)        # Nordea
+    consent_id   = db.Column(db.String(255), nullable=True) # Commerzbank, UniCredit
+    status       = db.Column(db.String(20), nullable=False, default="active")  # active | expired | revoked
+    connected_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
+
+    user = db.relationship("User", back_populates="bank_connections")
+
+    __table_args__ = (
+        db.UniqueConstraint("user_id", "bank", name="uq_user_bank"),
+    )

@@ -257,6 +257,7 @@
       <div class="nav-logo-icon">◆</div>
       Bank Connectivity
     </a>
+    {% if current_user.is_authenticated %}
     <div class="nav-divider"></div>
     <div class="nav-links">
       <a href="{{ url_for('dashboard') }}" {% if request.endpoint == 'dashboard' %}class="active"{% endif %}>Dashboard</a>
@@ -265,13 +266,21 @@
       <a href="{{ url_for('recurring') }}" {% if request.endpoint == 'recurring' %}class="active"{% endif %}>Recurring</a>
       <a href="{{ url_for('index') }}" {% if request.endpoint == 'index' %}class="active"{% endif %}>Connect</a>
     </div>
+    {% endif %}
     <div class="nav-spacer"></div>
-    {% if session.bank %}
-    <div class="nav-bank-badge">
-      <span class="dot"></span>
-      {{ session.bank | capitalize }}
-    </div>
-    <a class="nav-disconnect" href="{{ url_for('disconnect') }}">Disconnect</a>
+    {% if current_user.is_authenticated %}
+      {% if session.bank %}
+      <div class="nav-bank-badge">
+        <span class="dot"></span>
+        {{ session.bank | capitalize }}
+      </div>
+      <a class="nav-disconnect" href="{{ url_for('disconnect') }}">Disconnect</a>
+      {% endif %}
+      <div class="nav-bank-badge">
+        <span style="max-width:160px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">{{ current_user.email }}</span>
+        {% if current_user.role == "tpp_admin" %}<span style="color:var(--accent);font-weight:600;">· Admin</span>{% endif %}
+      </div>
+      <a class="nav-disconnect" href="{{ url_for('logout') }}">Logout</a>
     {% endif %}
   </div>
 </nav>

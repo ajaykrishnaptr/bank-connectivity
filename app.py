@@ -1,7 +1,10 @@
 import os
+from functools import wraps
 
 from dotenv import load_dotenv
-from flask import Flask, flash, redirect, render_template, request, session, url_for
+from flask import Flask, abort, flash, redirect, render_template, request, session, url_for
+from flask_login import LoginManager, current_user, login_required, login_user, logout_user
+from werkzeug.security import check_password_hash, generate_password_hash
 
 load_dotenv()
 
@@ -11,7 +14,7 @@ import commerzbank_client
 import db_utils
 import nordea_client
 import psd2_client
-from models import Transaction, db
+from models import Account, BankConnection, Transaction, User, db
 
 BANK_COLORS = {
     "commerzbank": "#e67e22",
@@ -21,19 +24,113 @@ BANK_COLORS = {
     "unicredit":   "#c0392b",
 }
 
+
+def _parse_date_range(req, default="month"):
+    from datetime import date, timedelta
+    today = date.today()
+    try:
+        date_from = date.fromisoformat(req.args.get("from", ""))
+    except ValueError:
+        date_from = date(today.year, today.month, 1) if default == "month" \
+            else today - timedelta(days=89)
+    try:
+        date_to = date.fromisoformat(req.args.get("to", ""))
+    except ValueError:
+        date_to = today
+    return date_from, date_to
+
+
+def _mom_delta(current: float, prev: float):
+    """(pct_change, 'up'|'down'|'new')  positive pct = increased."""
+    if prev == 0:
+        return None, "new"
+    pct = round((current - prev) / abs(prev) * 100, 1)
+    return pct, "up" if pct > 0 else "down"
+
+
+def _detect_recurring(acct_filter=None):
+    from collections import defaultdict
+    from datetime import date
+
+    q = (
+        db.session.query(Transaction, Account)
+        .join(Account, Transaction.account_id == Account.id)
+        .filter(Transaction.status == "booked")
+    )
+    if acct_filter is not None:
+        q = q.filter(acct_filter)
+    all_txns = q.all()
+
+    def _process(sign):
+        by_merchant = defaultdict(list)
+        for t, a in all_txns:
+            if (float(t.amount) < 0) == (sign < 0):
+                merchant = t.creditor_name or t.debtor_name or ""
+                if merchant:
+                    by_merchant[(merchant, a.bank)].append((t, a))
+        results = []
+        for (merchant, bank), txns in by_merchant.items():
+            months = {(t.booking_date.year, t.booking_date.month)
+                      for t, _ in txns if t.booking_date}
+            if len(months) < 2:
+                continue
+            amounts = [abs(float(t.amount)) for t, _ in txns]
+            avg = sum(amounts) / len(amounts)
+            cv = (sum((a - avg) ** 2 for a in amounts) / len(amounts)) ** .5 / avg \
+                if avg > 0 else 0
+            last_t = max((t for t, _ in txns if t.booking_date),
+                         key=lambda t: t.booking_date)
+            next_date = None
+            if last_t.booking_date:
+                y, m = last_t.booking_date.year, last_t.booking_date.month + 1
+                if m > 12:
+                    m, y = 1, y + 1
+                try:
+                    next_date = date(y, m, last_t.booking_date.day)
+                except ValueError:
+                    next_date = date(y, m, 28)
+            results.append({
+                "merchant": merchant, "bank": bank,
+                "color": BANK_COLORS.get(bank, "#95a5a6"),
+                "category": last_t.category or "Other",
+                "avg_amount": round(avg, 2),
+                "occurrences": len(txns), "months": len(months),
+                "is_fixed": cv < 0.08,
+                "last_date": last_t.booking_date, "next_date": next_date,
+            })
+        return sorted(results, key=lambda x: (-x["months"], -x["avg_amount"]))
+
+    return _process(-1), _process(+1)
+
+
 app = Flask(__name__)
 app.secret_key = os.getenv("FLASK_SECRET_KEY", "dev-secret")
 app.config["SANDBOX_BASE_URL"] = os.getenv("SANDBOX_BASE_URL", "https://developer.unicredit.eu")
 app.config["REDIRECT_URI"] = os.getenv("REDIRECT_URI", "http://localhost:5000/callback")
 app.config["CB_REDIRECT_URI"] = os.getenv("CB_REDIRECT_URI", "http://localhost:5000/commerzbank/callback")
 app.config["NORDEA_REDIRECT_URI"] = os.getenv("NORDEA_REDIRECT_URI", "http://localhost:5000/nordea/callback")
-app.config["SQLALCHEMY_DATABASE_URI"] = os.getenv("DATABASE_URL", "postgresql://localhost/ais_db")
+app.config["SQLALCHEMY_DATABASE_URI"] = os.getenv("DATABASE_URL", "sqlite:///ais.db")
 app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
 
 db.init_app(app)
 
+login_manager = LoginManager(app)
+login_manager.login_view = "login"
+
+
+@login_manager.user_loader
+def load_user(user_id):
+    return User.query.get(int(user_id))
+
+
 with app.app_context():
     db.create_all()
+    # SQLite: add user_id column to accounts if missing
+    with db.engine.connect() as conn:
+        cols = [r[1] for r in conn.execute(db.text("PRAGMA table_info(accounts)")).fetchall()]
+        if "user_id" not in cols:
+            conn.execute(db.text("ALTER TABLE accounts ADD COLUMN user_id INTEGER REFERENCES users(id)"))
+            conn.commit()
     # Backfill category for any rows that predate the column
     uncategorized = Transaction.query.filter(Transaction.category.is_(None)).all()
     for t in uncategorized:
@@ -42,40 +139,164 @@ with app.app_context():
         db.session.commit()
 
 
+def tpp_required(f):
+    @wraps(f)
+    def decorated(*args, **kwargs):
+        if not current_user.is_authenticated or current_user.role != "tpp_admin":
+            abort(403)
+        return f(*args, **kwargs)
+    return decorated
+
+
+def _acct_query():
+    """Account query scoped to current user (unrestricted for tpp_admin)."""
+    q = Account.query
+    if current_user.role != "tpp_admin":
+        q = q.filter(Account.user_id == current_user.id)
+    return q
+
+
+def _txn_acct_query():
+    """Transaction+Account join scoped to current user (unrestricted for tpp_admin)."""
+    q = db.session.query(Transaction, Account).join(Account, Transaction.account_id == Account.id)
+    if current_user.role != "tpp_admin":
+        q = q.filter(Account.user_id == current_user.id)
+    return q
+
+
+def _get_connection(bank):
+    """Return the active BankConnection for current_user + bank, or None."""
+    return BankConnection.query.filter_by(
+        user_id=current_user.id, bank=bank, status="active"
+    ).first()
+
+
+def _upsert_connection(bank, access_token=None, consent_id=None):
+    """Save or update a BankConnection for current_user, then fetch and store data."""
+    conn = BankConnection.query.filter_by(user_id=current_user.id, bank=bank).first()
+    if conn:
+        conn.access_token = access_token
+        conn.consent_id   = consent_id
+        conn.status       = "active"
+    else:
+        conn = BankConnection(
+            user_id=current_user.id, bank=bank,
+            access_token=access_token, consent_id=consent_id,
+        )
+        db.session.add(conn)
+    db.session.commit()
+    _fetch_and_store(bank, conn)
+    return conn
+
+
+def _fetch_and_store(bank, conn):
+    """Fetch all accounts + transactions from the bank API and upsert into DB."""
+    if bank == "nordea":
+        account_list = nordea_client.get_accounts(conn.access_token)
+    elif bank == "commerzbank":
+        token = commerzbank_client.get_oauth_token()
+        account_list = commerzbank_client.get_accounts(token, conn.consent_id)
+    else:  # unicredit
+        account_list = psd2_client.get_accounts(app.config["SANDBOX_BASE_URL"], conn.consent_id)
+
+    saved = db_utils.upsert_accounts(bank, account_list, user_id=conn.user_id)
+
+    for acc in saved:
+        if bank == "nordea":
+            txn_data = nordea_client.get_transactions(conn.access_token, acc.resource_id)
+        elif bank == "commerzbank":
+            token = commerzbank_client.get_oauth_token()
+            txn_data = commerzbank_client.get_transactions(token, conn.consent_id, acc.resource_id)
+        else:
+            txn_data = psd2_client.get_transactions(
+                app.config["SANDBOX_BASE_URL"], conn.consent_id, acc.resource_id)
+        db_utils.upsert_transactions(bank, acc.resource_id, txn_data)
+
+
 # ── Home ─────────────────────────────────────────────────────────────────────
 
 @app.route("/")
+@login_required
 def index():
-    return render_template("index.html")
+    connections = {c.bank: c for c in BankConnection.query.filter_by(user_id=current_user.id).all()}
+    return render_template("index.html", connections=connections)
 
 
-@app.route("/disconnect")
-def disconnect():
-    session.clear()
-    flash("Disconnected.", "info")
+@app.route("/disconnect/<bank>")
+@login_required
+def disconnect(bank):
+    conn = BankConnection.query.filter_by(user_id=current_user.id, bank=bank).first()
+    if conn:
+        conn.status = "revoked"
+        db.session.commit()
+    flash(f"Disconnected from {bank.capitalize()}.", "info")
     return redirect(url_for("index"))
+
+
+# ── Auth ─────────────────────────────────────────────────────────────────────
+
+@app.route("/login", methods=["GET", "POST"])
+def login():
+    if current_user.is_authenticated:
+        return redirect(url_for("index"))
+    if request.method == "POST":
+        email = request.form.get("email", "").strip().lower()
+        password = request.form.get("password", "")
+        user = User.query.filter_by(email=email).first()
+        if user and check_password_hash(user.password_hash, password):
+            login_user(user)
+            return redirect(request.args.get("next") or url_for("index"))
+        flash("Invalid email or password.", "error")
+    return render_template("login.html")
+
+
+@app.route("/signup", methods=["GET", "POST"])
+def signup():
+    if current_user.is_authenticated:
+        return redirect(url_for("index"))
+    if request.method == "POST":
+        email = request.form.get("email", "").strip().lower()
+        password = request.form.get("password", "")
+        password2 = request.form.get("password2", "")
+        if not email or not password:
+            flash("Email and password are required.", "error")
+        elif password != password2:
+            flash("Passwords do not match.", "error")
+        elif len(password) < 8:
+            flash("Password must be at least 8 characters.", "error")
+        elif User.query.filter_by(email=email).first():
+            flash("An account with that email already exists.", "error")
+        else:
+            is_first = User.query.count() == 0
+            user = User(
+                email=email,
+                password_hash=generate_password_hash(password),
+                role="tpp_admin" if is_first else "user",
+            )
+            db.session.add(user)
+            db.session.commit()
+            login_user(user)
+            flash("You are the TPP admin." if is_first else "Account created.", "success")
+            return redirect(url_for("index"))
+    return render_template("signup.html")
+
+
+@app.route("/logout")
+@login_required
+def logout():
+    session.clear()
+    logout_user()
+    return redirect(url_for("login"))
 
 
 # ── Analytics ────────────────────────────────────────────────────────────────
 
 @app.route("/aggregation")
+@login_required
 def aggregation():
     from collections import defaultdict
-    from models import Account
 
-    accounts = (
-        db.session.query(Account)
-        .order_by(Account.bank, Account.id)
-        .all()
-    )
-
-    BANK_COLORS = {
-        "commerzbank": "#e67e22",
-        "nordea":      "#3498db",
-        "hdfc":        "#e74c3c",
-        "sbi":         "#9b59b6",
-        "unicredit":   "#c0392b",
-    }
+    accounts = _acct_query().order_by(Account.bank, Account.id).all()
 
     rows = []
     bank_totals = defaultdict(float)
@@ -83,11 +304,11 @@ def aggregation():
         balance = sum(float(t.amount) for t in acc.transactions)
         last_txn = max((t.booking_date for t in acc.transactions if t.booking_date), default=None)
         rows.append({
-            "account":    acc,
-            "balance":    round(balance, 2),
-            "txn_count":  len(acc.transactions),
-            "last_txn":   last_txn,
-            "color":      BANK_COLORS.get(acc.bank, "#95a5a6"),
+            "account":   acc,
+            "balance":   round(balance, 2),
+            "txn_count": len(acc.transactions),
+            "last_txn":  last_txn,
+            "color":     BANK_COLORS.get(acc.bank, "#95a5a6"),
         })
         bank_totals[acc.bank] += balance
 
@@ -97,105 +318,98 @@ def aggregation():
         for b, t in sorted(bank_totals.items(), key=lambda x: -x[1])
     ]
 
-    chart_labels  = [f"{r['account'].owner_name or r['account'].iban} ({r['account'].bank.upper()})" for r in rows]
-    chart_values  = [r["balance"] for r in rows]
-    chart_colors  = [r["color"] for r in rows]
+    chart_labels = [f"{r['account'].owner_name or r['account'].iban} ({r['account'].bank.upper()})" for r in rows]
+    chart_values = [r["balance"] for r in rows]
+    chart_colors = [r["color"] for r in rows]
 
     return render_template("aggregation.html",
-        rows=rows,
-        bank_summary=bank_summary,
-        total_balance=total_balance,
-        chart_labels=chart_labels,
-        chart_values=chart_values,
-        chart_colors=chart_colors,
+        rows=rows, bank_summary=bank_summary, total_balance=total_balance,
+        chart_labels=chart_labels, chart_values=chart_values, chart_colors=chart_colors,
         account_count=len(rows),
     )
 
 
 @app.route("/dashboard")
+@login_required
 def dashboard():
     from collections import defaultdict
-    from datetime import date
-    from models import Account
+    from datetime import date, timedelta
 
-    today = date.today()
-    cy, cm = today.year, today.month
+    date_from, date_to = _parse_date_range(request, default="month")
+    period_days = (date_to - date_from).days + 1
+    prev_to   = date_from - timedelta(days=1)
+    prev_from = prev_to   - timedelta(days=period_days - 1)
 
-    all_rows = (
-        db.session.query(Transaction, Account)
-        .join(Account, Transaction.account_id == Account.id)
-        .filter(Transaction.status == "booked")
-        .all()
-    )
+    all_rows  = _txn_acct_query().filter(Transaction.status == "booked").all()
     all_banks = sorted(set(a.bank for _, a in all_rows))
 
-    this_month = [(t, a) for t, a in all_rows
-                  if t.booking_date and t.booking_date.year == cy and t.booking_date.month == cm]
+    def _in(t, d0, d1):
+        return t.booking_date and d0 <= t.booking_date <= d1
 
-    total_spent  = abs(sum(float(t.amount) for t, _ in this_month if t.amount < 0))
-    total_income = sum(float(t.amount) for t, _ in this_month if t.amount > 0)
-    net          = total_income - total_spent
+    period_rows = [(t, a) for t, a in all_rows if _in(t, date_from, date_to)]
+    prev_rows   = [(t, a) for t, a in all_rows if _in(t, prev_from, prev_to)]
 
-    # Per-bank spend/income this month
-    bank_month = defaultdict(lambda: {"spent": 0.0, "income": 0.0})
-    for t, a in this_month:
+    def _totals(rows):
+        spent  = abs(sum(float(t.amount) for t, _ in rows if t.amount < 0))
+        income = sum(float(t.amount) for t, _ in rows if t.amount > 0)
+        return spent, income
+
+    total_spent,  total_income  = _totals(period_rows)
+    prev_spent,   prev_income   = _totals(prev_rows)
+    net = total_income - total_spent
+
+    delta_spent  = _mom_delta(total_spent,  prev_spent)
+    delta_income = _mom_delta(total_income, prev_income)
+    delta_net    = _mom_delta(total_income - total_spent, prev_income - prev_spent)
+
+    bank_period = defaultdict(lambda: {"spent": 0.0, "income": 0.0})
+    for t, a in period_rows:
         if t.amount < 0:
-            bank_month[a.bank]["spent"] += abs(float(t.amount))
+            bank_period[a.bank]["spent"] += abs(float(t.amount))
         else:
-            bank_month[a.bank]["income"] += float(t.amount)
+            bank_period[a.bank]["income"] += float(t.amount)
     bank_month_summary = [
         {"bank": b, "spent": round(v["spent"], 2), "income": round(v["income"], 2),
          "color": BANK_COLORS.get(b, "#95a5a6")}
-        for b, v in sorted(bank_month.items(), key=lambda x: -x[1]["spent"])
+        for b, v in sorted(bank_period.items(), key=lambda x: -x[1]["spent"])
     ]
 
-    # Category donut (current month, all banks)
     cat_totals = defaultdict(float)
-    for t, _ in this_month:
+    for t, _ in period_rows:
         if t.amount < 0:
             cat_totals[t.category or "Other"] += abs(float(t.amount))
     cat_sorted = sorted(cat_totals.items(), key=lambda x: -x[1])
 
-    # Bank spending donut (current month)
-    bank_spent_month = [(b, round(v["spent"], 2)) for b, v in bank_month.items() if v["spent"] > 0]
-    bank_spent_month.sort(key=lambda x: -x[1])
+    bank_spent_period = sorted(
+        [(b, round(v["spent"], 2)) for b, v in bank_period.items() if v["spent"] > 0],
+        key=lambda x: -x[1]
+    )
 
-    # Last 6 months — stacked by bank
-    months = []
-    y, m = cy, cm
+    today = date.today()
+    months, y, m = [], today.year, today.month
     for _ in range(6):
         months.insert(0, (y, m))
         m -= 1
         if m == 0:
             m, y = 12, y - 1
     month_labels = [date(y, m, 1).strftime("%b %Y") for y, m in months]
+    monthly_by_bank = [{
+        "label": bank.capitalize(),
+        "data": [round(abs(sum(
+            float(t.amount) for t, a in all_rows
+            if a.bank == bank and t.booking_date
+            and t.booking_date.year == y and t.booking_date.month == m
+            and t.amount < 0
+        )), 2) for y, m in months],
+        "backgroundColor": BANK_COLORS.get(bank, "#95a5a6") + "cc",
+        "borderColor": BANK_COLORS.get(bank, "#95a5a6"),
+        "borderWidth": 1, "stack": "expenses",
+    } for bank in all_banks]
 
-    monthly_by_bank = []
-    for bank in all_banks:
-        data = []
-        for y, m in months:
-            amt = round(abs(sum(
-                float(t.amount) for t, a in all_rows
-                if a.bank == bank and t.booking_date
-                and t.booking_date.year == y and t.booking_date.month == m
-                and t.amount < 0
-            )), 2)
-            data.append(amt)
-        monthly_by_bank.append({
-            "label": bank.capitalize(),
-            "data": data,
-            "backgroundColor": BANK_COLORS.get(bank, "#95a5a6") + "cc",
-            "borderColor": BANK_COLORS.get(bank, "#95a5a6"),
-            "borderWidth": 1,
-            "stack": "expenses",
-        })
-
-    # Top 10 merchants with bank
     merchant_key = defaultdict(lambda: {"total": 0.0, "bank": ""})
-    for t, a in all_rows:
+    for t, a in period_rows:
         if t.amount < 0:
-            name = t.creditor_name or t.debtor_name or "Unknown"
-            k = (name, a.bank)
+            k = (t.creditor_name or t.debtor_name or "Unknown", a.bank)
             merchant_key[k]["total"] += abs(float(t.amount))
             merchant_key[k]["bank"] = a.bank
     top_merchants = sorted(
@@ -204,99 +418,115 @@ def dashboard():
         key=lambda x: -x["total"]
     )[:10]
 
-    # Recent 15 transactions
     recent = sorted(
         [(t, a) for t, a in all_rows if t.booking_date],
         key=lambda x: x[0].booking_date, reverse=True
     )[:15]
 
     return render_template("dashboard.html",
-        current_month=date(cy, cm, 1).strftime("%B %Y"),
-        total_spent=round(total_spent, 2),
-        total_income=round(total_income, 2),
-        net=round(net, 2),
-        account_count=Account.query.count(),
+        date_from=date_from, date_to=date_to,
+        period_label=f"{date_from.strftime('%d %b')} – {date_to.strftime('%d %b %Y')}",
+        total_spent=round(total_spent, 2), total_income=round(total_income, 2), net=round(net, 2),
+        delta_spent=delta_spent, delta_income=delta_income, delta_net=delta_net,
+        account_count=_acct_query().count(),
         bank_month_summary=bank_month_summary,
-        cat_labels=[c for c, _ in cat_sorted],
-        cat_values=[round(v, 2) for _, v in cat_sorted],
-        bank_donut_labels=[b for b, _ in bank_spent_month],
-        bank_donut_values=[v for _, v in bank_spent_month],
-        bank_donut_colors=[BANK_COLORS.get(b, "#95a5a6") for b, _ in bank_spent_month],
-        month_labels=month_labels,
-        monthly_by_bank=monthly_by_bank,
-        top_merchants=top_merchants,
-        recent=recent,
+        cat_labels=[c for c, _ in cat_sorted], cat_values=[round(v, 2) for _, v in cat_sorted],
+        bank_donut_labels=[b for b, _ in bank_spent_period],
+        bank_donut_values=[v for _, v in bank_spent_period],
+        bank_donut_colors=[BANK_COLORS.get(b, "#95a5a6") for b, _ in bank_spent_period],
+        month_labels=month_labels, monthly_by_bank=monthly_by_bank,
+        top_merchants=top_merchants, recent=recent,
     )
 
 
 @app.route("/spending")
+@login_required
 def spending():
     from collections import defaultdict
-    from models import Account
-    rows = (
-        db.session.query(Transaction, Account)
-        .join(Account, Transaction.account_id == Account.id)
-        .filter(Transaction.amount < 0)
-        .order_by(Transaction.booking_date.desc())
-        .all()
-    )
+    from datetime import timedelta
+
+    date_from, date_to = _parse_date_range(request, default="3m")
+    period_days = (date_to - date_from).days + 1
+    prev_to   = date_from - timedelta(days=1)
+    prev_from = prev_to   - timedelta(days=period_days - 1)
+
+    def _fetch(d0, d1):
+        return (
+            _txn_acct_query()
+            .filter(Transaction.amount < 0,
+                    Transaction.booking_date >= d0,
+                    Transaction.booking_date <= d1)
+            .order_by(Transaction.booking_date.desc())
+            .all()
+        )
+
+    rows      = _fetch(date_from, date_to)
+    prev_rows = _fetch(prev_from, prev_to)
     all_banks = sorted(set(a.bank for _, a in rows))
 
-    totals     = defaultdict(float)
+    totals      = defaultdict(float)
     by_category = defaultdict(list)
     cat_by_bank = defaultdict(lambda: defaultdict(float))
+    prev_totals = defaultdict(float)
 
     for txn, acc in rows:
-        totals[txn.category] += float(txn.amount)
+        totals[txn.category]                += float(txn.amount)
         by_category[txn.category].append((txn, acc))
         cat_by_bank[txn.category][acc.bank] += abs(float(txn.amount))
+    for txn, _ in prev_rows:
+        prev_totals[txn.category] += abs(float(txn.amount))
 
     sorted_totals = sorted(totals.items(), key=lambda x: x[1])
-    categories = [c for c, _ in sorted_totals]
+    categories    = [c for c, _ in sorted_totals]
 
-    # Grouped bar datasets: one per bank
     grouped_datasets = [{
         "label": b.capitalize(),
         "data": [round(cat_by_bank[c].get(b, 0), 2) for c in categories],
         "backgroundColor": BANK_COLORS.get(b, "#95a5a6") + "cc",
         "borderColor": BANK_COLORS.get(b, "#95a5a6"),
-        "borderWidth": 1,
-        "borderRadius": 3,
+        "borderWidth": 1, "borderRadius": 3,
     } for b in all_banks]
 
-    # Per-category bank breakdown for table
-    cat_bank_rows = {
-        c: [(b, round(cat_by_bank[c].get(b, 0), 2)) for b in all_banks]
-        for c in categories
-    }
+    cat_bank_rows = {c: [(b, round(cat_by_bank[c].get(b, 0), 2)) for b in all_banks] for c in categories}
+    cat_deltas    = {c: _mom_delta(abs(totals[c]), prev_totals.get(c, 0)) for c in categories}
+    bank_totals   = {b: round(sum(cat_by_bank[c].get(b, 0) for c in categories), 2) for b in all_banks}
+    grand_total   = round(sum(bank_totals.values()), 2)
+    txn_count     = sum(len(v) for v in by_category.values())
 
-    bank_totals = {
-        b: round(sum(cat_by_bank[c].get(b, 0) for c in categories), 2)
-        for b in all_banks
-    }
-    grand_total = round(sum(bank_totals.values()), 2)
-    txn_count = sum(len(v) for v in by_category.values())
     return render_template("spending.html",
-        totals=sorted_totals,
-        by_category=by_category,
-        all_banks=all_banks,
-        categories=categories,
-        grouped_datasets=grouped_datasets,
-        cat_bank_rows=cat_bank_rows,
-        bank_totals=bank_totals,
-        grand_total=grand_total,
+        date_from=date_from, date_to=date_to,
+        period_label=f"{date_from.strftime('%d %b')} – {date_to.strftime('%d %b %Y')}",
+        totals=sorted_totals, by_category=by_category,
+        all_banks=all_banks, categories=categories,
+        grouped_datasets=grouped_datasets, cat_bank_rows=cat_bank_rows,
+        cat_deltas=cat_deltas, bank_totals=bank_totals,
+        grand_total=grand_total, bank_colors=BANK_COLORS, txn_count=txn_count,
+    )
+
+
+@app.route("/recurring")
+@login_required
+def recurring():
+    acct_filter = None if current_user.role == "tpp_admin" else (Account.user_id == current_user.id)
+    expenses, income = _detect_recurring(acct_filter=acct_filter)
+    fixed    = [r for r in expenses if r["is_fixed"]]
+    variable = [r for r in expenses if not r["is_fixed"]]
+    return render_template("recurring.html",
+        fixed=fixed, variable=variable, income=income,
+        monthly_fixed=round(sum(r["avg_amount"] for r in fixed), 2),
+        monthly_all=round(sum(r["avg_amount"] for r in expenses), 2),
+        monthly_income=round(sum(r["avg_amount"] for r in income), 2),
         bank_colors=BANK_COLORS,
-        txn_count=txn_count,
     )
 
 
 # ── UniCredit (mTLS + consent SCA) ───────────────────────────────────────────
 
 @app.route("/unicredit/connect")
+@login_required
 def unicredit_connect():
     try:
         sca_url = auth.initiate_consent_flow()
-        session["bank"] = "unicredit"
         return redirect(sca_url)
     except psd2_client.PSD2ApiError as e:
         flash(str(e), "error")
@@ -304,11 +534,14 @@ def unicredit_connect():
 
 
 @app.route("/callback")
+@login_required
 def callback():
     try:
         status = auth.check_and_store_consent_status()
         if status == "valid":
-            return redirect(url_for("accounts"))
+            _upsert_connection("unicredit", consent_id=session.pop("consent_id", None))
+            flash("UniCredit connected. Accounts fetched.", "success")
+            return redirect(url_for("dashboard"))
         flash(f"Consent not yet valid (status: {status}). Complete SCA and try again.", "warning")
         return render_template("consent_pending.html", status=status)
     except psd2_client.PSD2ApiError as e:
@@ -319,32 +552,32 @@ def callback():
 # ── Commerzbank (OAuth + consent SCA) ────────────────────────────────────────
 
 @app.route("/commerzbank/connect")
+@login_required
 def commerzbank_connect():
     try:
         commerzbank_client.get_oauth_token()  # validate credentials early
-        consent_id = commerzbank_client.SANDBOX_CONSENT
-        session["bank"] = "commerzbank"
-        # Show the SCA consent authorization screen before granting access
-        return render_template("cb_consent.html", consent_id=consent_id)
+        return render_template("cb_consent.html", consent_id=commerzbank_client.SANDBOX_CONSENT)
     except commerzbank_client.CommerzbankApiError as e:
         flash(str(e), "error")
         return redirect(url_for("index"))
 
 
 @app.route("/commerzbank/authorize", methods=["POST"])
+@login_required
 def commerzbank_authorize():
     consent_id = request.form.get("consent_id")
     if not consent_id:
         flash("Missing consent ID.", "error")
         return redirect(url_for("index"))
     try:
-        token = commerzbank_client.get_oauth_token()
+        token  = commerzbank_client.get_oauth_token()
         status = commerzbank_client.get_consent_status(token, consent_id)
         if status != "valid":
             flash(f"Consent not valid (status: {status}).", "warning")
             return render_template("consent_pending.html", status=status)
-        session["cb_consent_id"] = consent_id
-        return redirect(url_for("accounts"))
+        _upsert_connection("commerzbank", consent_id=consent_id)
+        flash("Commerzbank connected. Accounts fetched.", "success")
+        return redirect(url_for("dashboard"))
     except commerzbank_client.CommerzbankApiError as e:
         flash(str(e), "error")
         return redirect(url_for("index"))
@@ -353,26 +586,28 @@ def commerzbank_authorize():
 # ── Nordea (OAuth authorization_code + SCA redirect) ─────────────────────────
 
 @app.route("/nordea/connect")
+@login_required
 def nordea_connect():
-    session["bank"] = "nordea"
     return render_template("nordea_consent.html", country=nordea_client.COUNTRY)
 
 
 @app.route("/nordea/authorize", methods=["POST"])
+@login_required
 def nordea_authorize():
     try:
-        from urllib.parse import urlparse, parse_qs
+        from urllib.parse import parse_qs, urlparse
         redirect_uri = app.config["NORDEA_REDIRECT_URI"]
         location, state = nordea_client.initiate_authorize(redirect_uri)
         session["nordea_state"] = state
         parsed = urlparse(location)
         params = parse_qs(parsed.query)
         if "code" in params:
-            # Sandbox: mock authorizer auto-approved, code already in Location
+            # Sandbox auto-approves — code is already in the redirect Location
             token = nordea_client.exchange_code(params["code"][0], redirect_uri)
-            session["nordea_token"] = token
-            return redirect(url_for("accounts"))
-        # Production: redirect user to Nordea SCA page
+            _upsert_connection("nordea", access_token=token)
+            flash("Nordea connected. Accounts fetched.", "success")
+            return redirect(url_for("dashboard"))
+        # Production: send user to Nordea SCA page
         return redirect(location)
     except nordea_client.NordeaApiError as e:
         flash(str(e), "error")
@@ -380,6 +615,7 @@ def nordea_authorize():
 
 
 @app.route("/nordea/callback")
+@login_required
 def nordea_callback():
     code = request.args.get("code")
     if not code:
@@ -387,90 +623,66 @@ def nordea_callback():
     try:
         redirect_uri = app.config["NORDEA_REDIRECT_URI"]
         token = nordea_client.exchange_code(code, redirect_uri)
-        session["bank"] = "nordea"
-        session["nordea_token"] = token
-        return redirect(url_for("accounts"))
+        session.pop("nordea_state", None)
+        _upsert_connection("nordea", access_token=token)
+        flash("Nordea connected. Accounts fetched.", "success")
+        return redirect(url_for("dashboard"))
     except nordea_client.NordeaApiError as e:
         flash(str(e), "error")
         return redirect(url_for("index"))
 
 
-# ── Shared account views ──────────────────────────────────────────────────────
-
-@app.route("/accounts")
-def accounts():
-    bank = session.get("bank")
-    if not bank:
-        flash("Please connect to a bank first.", "warning")
-        return redirect(url_for("index"))
-    try:
-        if bank == "commerzbank":
-            consent_id = session.get("cb_consent_id")
-            if not consent_id:
-                flash("No active consent. Please connect first.", "warning")
-                return redirect(url_for("index"))
-            account_list = commerzbank_client.get_accounts(
-                commerzbank_client.get_oauth_token(), consent_id)
-        elif bank == "nordea":
-            token = session.get("nordea_token")
-            if not token:
-                flash("No active session. Please connect first.", "warning")
-                return redirect(url_for("index"))
-            account_list = nordea_client.get_accounts(token)
-        else:
-            if not session.get("consent_id"):
-                flash("No active consent. Please connect first.", "warning")
-                return redirect(url_for("index"))
-            account_list = psd2_client.get_accounts(
-                app.config["SANDBOX_BASE_URL"], session["consent_id"])
-        db_utils.upsert_accounts(bank, account_list)
-        return render_template("accounts.html", accounts=account_list, bank=bank)
-    except (psd2_client.PSD2ApiError, commerzbank_client.CommerzbankApiError, nordea_client.NordeaApiError) as e:
-        flash(str(e), "error")
-        return redirect(url_for("index"))
-
+# ── Account detail views (live API, DB-backed credentials) ───────────────────
 
 @app.route("/accounts/<account_id>/balances")
+@login_required
 def balances(account_id):
-    bank = session.get("bank")
-    if not bank:
-        flash("Please connect to a bank first.", "warning")
+    acc  = Account.query.get_or_404(account_id)
+    conn = _get_connection(acc.bank)
+    if not conn:
+        flash(f"No active {acc.bank.capitalize()} connection.", "warning")
         return redirect(url_for("index"))
     try:
-        if bank == "commerzbank":
+        if acc.bank == "commerzbank":
             balance_list = commerzbank_client.get_balances(
-                commerzbank_client.get_oauth_token(), session["cb_consent_id"], account_id)
-        elif bank == "nordea":
-            balance_list = nordea_client.get_balances(session["nordea_token"], account_id)
+                commerzbank_client.get_oauth_token(), conn.consent_id, account_id)
+        elif acc.bank == "nordea":
+            balance_list = nordea_client.get_balances(conn.access_token, account_id)
         else:
             balance_list = psd2_client.get_balances(
-                app.config["SANDBOX_BASE_URL"], session["consent_id"], account_id)
-        return render_template("balances.html", balances=balance_list, account_id=account_id, bank=bank)
-    except (psd2_client.PSD2ApiError, commerzbank_client.CommerzbankApiError, nordea_client.NordeaApiError) as e:
+                app.config["SANDBOX_BASE_URL"], conn.consent_id, account_id)
+        return render_template("balances.html", balances=balance_list,
+                               account_id=account_id, bank=acc.bank)
+    except (psd2_client.PSD2ApiError, commerzbank_client.CommerzbankApiError,
+            nordea_client.NordeaApiError) as e:
         flash(str(e), "error")
-        return redirect(url_for("accounts"))
+        return redirect(url_for("index"))
 
 
 @app.route("/accounts/<account_id>/transactions")
+@login_required
 def transactions(account_id):
-    bank = session.get("bank")
-    if not bank:
-        flash("Please connect to a bank first.", "warning")
+    acc  = Account.query.get_or_404(account_id)
+    conn = _get_connection(acc.bank)
+    if not conn:
+        flash(f"No active {acc.bank.capitalize()} connection.", "warning")
         return redirect(url_for("index"))
     try:
-        if bank == "commerzbank":
+        if acc.bank == "commerzbank":
             txn_data = commerzbank_client.get_transactions(
-                commerzbank_client.get_oauth_token(), session["cb_consent_id"], account_id)
-        elif bank == "nordea":
-            txn_data = nordea_client.get_transactions(session["nordea_token"], account_id)
+                commerzbank_client.get_oauth_token(), conn.consent_id, account_id)
+        elif acc.bank == "nordea":
+            txn_data = nordea_client.get_transactions(conn.access_token, account_id)
         else:
             txn_data = psd2_client.get_transactions(
-                app.config["SANDBOX_BASE_URL"], session["consent_id"], account_id)
-        db_utils.upsert_transactions(bank, account_id, txn_data)
-        return render_template("transactions.html", transactions=txn_data, account_id=account_id, bank=bank)
-    except (psd2_client.PSD2ApiError, commerzbank_client.CommerzbankApiError, nordea_client.NordeaApiError) as e:
+                app.config["SANDBOX_BASE_URL"], conn.consent_id, account_id)
+        db_utils.upsert_transactions(acc.bank, account_id, txn_data)
+        return render_template("transactions.html", transactions=txn_data,
+                               account_id=account_id, bank=acc.bank)
+    except (psd2_client.PSD2ApiError, commerzbank_client.CommerzbankApiError,
+            nordea_client.NordeaApiError) as e:
         flash(str(e), "error")
-        return redirect(url_for("accounts"))
+        return redirect(url_for("index"))
 
 
 if __name__ == "__main__":

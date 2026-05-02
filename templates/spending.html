@@ -1,8 +1,28 @@
 {% extends "base.html" %}
 {% block content %}
-<div class="page-header">
-  <h2>Spending by Category</h2>
-  <p>Expenses only · all banks · all time · {{ txn_count }} transactions</p>
+
+<div class="page-header" style="display:flex;align-items:flex-start;justify-content:space-between;flex-wrap:wrap;gap:1rem">
+  <div>
+    <h2>Spending by Category <span class="subtitle">{{ period_label }}</span></h2>
+    <p>{{ txn_count }} transactions · all banks</p>
+  </div>
+  <form id="ff" method="GET" action="{{ url_for('spending') }}"
+    style="display:flex;align-items:center;gap:.4rem;flex-wrap:wrap">
+    <div style="display:flex;gap:.25rem">
+      {% for label, d in [('1M',30),('3M',90),('6M',180),('All',0)] %}
+      <button type="button" onclick="setPreset('{{ label }}',{{ d }})"
+        style="padding:.3rem .6rem;border-radius:6px;border:1px solid var(--border);
+          background:var(--surface);font-size:.75rem;cursor:pointer;color:var(--text-2)">{{ label }}</button>
+      {% endfor %}
+    </div>
+    <input type="date" id="df" name="from" value="{{ date_from }}"
+      style="padding:.3rem .6rem;border:1px solid var(--border);border-radius:6px;font-size:.8rem;font-family:inherit">
+    <span style="color:var(--text-3);font-size:.8rem">→</span>
+    <input type="date" id="dt" name="to" value="{{ date_to }}"
+      style="padding:.3rem .6rem;border:1px solid var(--border);border-radius:6px;font-size:.8rem;font-family:inherit">
+    <button type="submit" style="padding:.3rem .75rem;background:var(--accent);color:#fff;
+      border:none;border-radius:6px;font-size:.8rem;cursor:pointer">Apply</button>
+  </form>
 </div>
 
 <!-- ── Grouped bar ── -->
@@ -21,25 +41,34 @@
         {% for b in all_banks %}
         <th class="text-right">
           <span class="pill" style="background:{{ bank_colors.get(b,'#95a5a6') }}18;color:{{ bank_colors.get(b,'#95a5a6') }};border:1px solid {{ bank_colors.get(b,'#95a5a6') }}33">
-            <span class="dot" style="background:{{ bank_colors.get(b,'#95a5a6') }}"></span>
-            {{ b | capitalize }}
+            <span class="dot" style="background:{{ bank_colors.get(b,'#95a5a6') }}"></span>{{ b | capitalize }}
           </span>
         </th>
         {% endfor %}
         <th class="text-right">Total €</th>
+        <th class="text-right">vs prev</th>
         <th class="text-right">Txns</th>
       </tr>
     </thead>
     <tbody>
       {% for category, total in totals %}
+      {% set pct, dir = cat_deltas[category] %}
       <tr>
-        <td><a href="#cat-{{ category | replace(' ', '-') | replace('/', '-') }}" style="color:var(--text);font-weight:500">{{ category }}</a></td>
+        <td><a href="#cat-{{ category | replace(' ','-') | replace('/','-') }}" style="color:var(--text);font-weight:500">{{ category }}</a></td>
         {% for b, amt in cat_bank_rows[category] %}
         <td class="text-right {% if amt > 0 %}text-red{% else %}text-muted{% endif %}">
           {% if amt > 0 %}{{ "%.2f" | format(amt) }}{% else %}—{% endif %}
         </td>
         {% endfor %}
         <td class="text-right text-red fw-600">{{ "%.2f" | format(total | abs) }}</td>
+        <td class="text-right" style="white-space:nowrap">
+          {% if dir == 'new' %}
+            <span style="font-size:.7rem;padding:2px 7px;border-radius:10px;background:#eef2ff;color:var(--accent);font-weight:600">NEW</span>
+          {% elif pct is not none %}
+            {% if dir == 'down' %}<span style="font-size:.75rem;font-weight:600;color:var(--green)">▼ {{ pct | abs }}%</span>
+            {% else %}<span style="font-size:.75rem;font-weight:600;color:var(--red)">▲ {{ pct | abs }}%</span>{% endif %}
+          {% else %}—{% endif %}
+        </td>
         <td class="text-right text-muted">{{ by_category[category] | length }}</td>
       </tr>
       {% endfor %}
@@ -47,10 +76,9 @@
     <tfoot>
       <tr>
         <th>Total</th>
-        {% for b in all_banks %}
-        <th class="text-right text-red">{{ "%.2f" | format(bank_totals[b]) }}</th>
-        {% endfor %}
+        {% for b in all_banks %}<th class="text-right text-red">{{ "%.2f" | format(bank_totals[b]) }}</th>{% endfor %}
         <th class="text-right text-red">{{ "%.2f" | format(grand_total) }}</th>
+        <th></th>
         <th class="text-right">{{ txn_count }}</th>
       </tr>
     </tfoot>
@@ -59,9 +87,8 @@
 
 <!-- ── Per-category expandable ── -->
 <div class="card-section-title" style="padding:0 .25rem .5rem">Transaction Details</div>
-
 {% for category, total in totals %}
-<details id="cat-{{ category | replace(' ', '-') | replace('/', '-') }}">
+<details id="cat-{{ category | replace(' ','-') | replace('/','-') }}">
   <summary>
     <span class="arrow">▶</span>
     <span style="font-weight:600;color:var(--text)">{{ category }}</span>
@@ -70,32 +97,24 @@
     <span style="margin-left:auto;display:flex;gap:.3rem;flex-wrap:wrap">
       {% for b, amt in cat_bank_rows[category] if amt > 0 %}
       <span class="pill" style="background:{{ bank_colors.get(b,'#95a5a6') }}18;color:{{ bank_colors.get(b,'#95a5a6') }};border:1px solid {{ bank_colors.get(b,'#95a5a6') }}33">
-        <span class="dot" style="background:{{ bank_colors.get(b,'#95a5a6') }}"></span>
-        {{ b | capitalize }} {{ "%.0f" | format(amt) }}€
-      </span>
-      {% endfor %}
+        <span class="dot" style="background:{{ bank_colors.get(b,'#95a5a6') }}"></span>{{ b | capitalize }} {{ "%.0f" | format(amt) }}€
+      </span>{% endfor %}
     </span>
   </summary>
   <table>
-    <thead>
-      <tr><th>Date</th><th>Bank</th><th>Account</th><th>Owner</th><th class="text-right">€</th><th>Merchant</th></tr>
-    </thead>
+    <thead><tr><th>Date</th><th>Bank</th><th>Account</th><th>Owner</th><th class="text-right">€</th><th>Merchant</th></tr></thead>
     <tbody>
       {% for txn, acc in by_category[category] %}
       <tr>
         <td class="mono text-muted">{{ txn.booking_date or "—" }}</td>
-        <td>
-          <span class="pill" style="background:{{ bank_colors.get(acc.bank,'#95a5a6') }}18;color:{{ bank_colors.get(acc.bank,'#95a5a6') }};border:1px solid {{ bank_colors.get(acc.bank,'#95a5a6') }}33">
-            <span class="dot" style="background:{{ bank_colors.get(acc.bank,'#95a5a6') }}"></span>
-            {{ acc.bank | upper }}
-          </span>
-        </td>
+        <td><span class="pill" style="background:{{ bank_colors.get(acc.bank,'#95a5a6') }}18;color:{{ bank_colors.get(acc.bank,'#95a5a6') }};border:1px solid {{ bank_colors.get(acc.bank,'#95a5a6') }}33">
+          <span class="dot" style="background:{{ bank_colors.get(acc.bank,'#95a5a6') }}"></span>{{ acc.bank | upper }}
+        </span></td>
         <td class="mono text-muted" style="font-size:.75rem">{{ acc.iban }}</td>
         <td>{{ acc.owner_name or "—" }}</td>
         <td class="text-right text-red fw-600">{{ "%.2f" | format(txn.amount) }}</td>
         <td>{{ txn.creditor_name or txn.debtor_name or "—" }}</td>
-      </tr>
-      {% endfor %}
+      </tr>{% endfor %}
     </tbody>
   </table>
 </details>
@@ -104,21 +123,21 @@
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4/dist/chart.umd.min.js"></script>
 <script>
 new Chart(document.getElementById('groupedChart'), {
-  type: 'bar',
-  data: { labels: {{ categories | tojson }}, datasets: {{ grouped_datasets | tojson }} },
-  options: {
-    indexAxis: 'y',
-    responsive: true,
-    scales: {
-      x: { beginAtZero: true, grid: { color: '#f1f5f9' },
-           ticks: { callback: v => '€' + v, font: { size: 11 } } },
-      y: { ticks: { font: { size: 11 } }, grid: { display: false } }
-    },
-    plugins: {
-      legend: { position: 'top', labels: { boxWidth: 10, font: { size: 11 }, padding: 12 } },
-      tooltip: { callbacks: { label: ctx => ` ${ctx.dataset.label}: €${ctx.parsed.x.toFixed(2)}` } }
-    }
-  }
+  type:'bar', data:{labels:{{ categories|tojson }}, datasets:{{ grouped_datasets|tojson }}},
+  options:{ indexAxis:'y', responsive:true,
+    scales:{ x:{beginAtZero:true,grid:{color:'#f1f5f9'},ticks:{callback:v=>'€'+v,font:{size:11}}}, y:{ticks:{font:{size:11}},grid:{display:false}} },
+    plugins:{ legend:{position:'top',labels:{boxWidth:10,font:{size:11},padding:12}}, tooltip:{callbacks:{label:ctx=>` ${ctx.dataset.label}: €${ctx.parsed.x.toFixed(2)}`}} } }
 });
+
+const today = new Date().toISOString().split('T')[0];
+function setPreset(label, days) {
+  const now = new Date();
+  let from;
+  if (label === 'All') { from = new Date('2025-01-01'); }
+  else { from = new Date(now); from.setDate(from.getDate() - days + 1); }
+  document.getElementById('df').value = from.toISOString().split('T')[0];
+  document.getElementById('dt').value = today;
+  document.getElementById('ff').submit();
+}
 </script>
 {% endblock %}

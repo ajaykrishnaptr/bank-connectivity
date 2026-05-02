@@ -1,41 +1,85 @@
 {% extends "base.html" %}
 {% block content %}
-<div class="page-header">
-  <h2>Dashboard <span class="subtitle">{{ current_month }}</span></h2>
+
+<div class="page-header" style="display:flex;align-items:flex-start;justify-content:space-between;flex-wrap:wrap;gap:1rem">
+  <div>
+    <h2>Dashboard <span class="subtitle">{{ period_label }}</span></h2>
+  </div>
+  <!-- Date filter -->
+  <form id="ff" method="GET" action="{{ url_for('dashboard') }}"
+    style="display:flex;align-items:center;gap:.4rem;flex-wrap:wrap">
+    <div style="display:flex;gap:.25rem">
+      {% for label, d in [('1M',30),('3M',90),('6M',180),('YTD',0)] %}
+      <button type="button" onclick="setPreset('{{ label }}',{{ d }})"
+        style="padding:.3rem .6rem;border-radius:6px;border:1px solid var(--border);
+          background:var(--surface);font-size:.75rem;cursor:pointer;color:var(--text-2)">
+        {{ label }}
+      </button>
+      {% endfor %}
+    </div>
+    <input type="date" id="df" name="from" value="{{ date_from }}"
+      style="padding:.3rem .6rem;border:1px solid var(--border);border-radius:6px;font-size:.8rem;font-family:inherit">
+    <span style="color:var(--text-3);font-size:.8rem">→</span>
+    <input type="date" id="dt" name="to" value="{{ date_to }}"
+      style="padding:.3rem .6rem;border:1px solid var(--border);border-radius:6px;font-size:.8rem;font-family:inherit">
+    <button type="submit" style="padding:.3rem .75rem;background:var(--accent);color:#fff;
+      border:none;border-radius:6px;font-size:.8rem;cursor:pointer">Apply</button>
+  </form>
 </div>
 
 <!-- ── Summary cards ── -->
 <div class="grid grid-3 mb-15">
 
+  {% macro delta_badge(delta, invert=false) %}
+  {% set pct, dir = delta %}
+  {% if dir == 'new' %}
+    <span style="font-size:.7rem;padding:2px 7px;border-radius:10px;background:#eef2ff;color:var(--accent);font-weight:600">NEW</span>
+  {% elif pct is not none %}
+    {% if (dir == 'up' and invert) or (dir == 'down' and not invert) %}
+      {% set c = '#10b981' %}{% set bg = '#f0fdf4' %}
+    {% else %}
+      {% set c = '#ef4444' %}{% set bg = '#fef2f2' %}
+    {% endif %}
+    <span style="font-size:.7rem;padding:2px 7px;border-radius:10px;background:{{ bg }};color:{{ c }};font-weight:600">
+      {% if dir == 'up' %}▲{% else %}▼{% endif %} {{ pct | abs }}%
+    </span>
+  {% endif %}
+  {% endmacro %}
+
   <div class="card" style="border-top:3px solid var(--red)">
-    <div class="card-label">Spent this month</div>
-    <div class="card-value text-red">-{{ "%.2f" | format(total_spent) }} €</div>
+    <div class="card-label">Spent</div>
+    <div style="display:flex;align-items:baseline;gap:.6rem">
+      <div class="card-value text-red">-{{ "%.2f" | format(total_spent) }} €</div>
+      {{ delta_badge(delta_spent, invert=true) }}
+    </div>
     <div class="card-meta" style="margin-top:.75rem;display:flex;flex-wrap:wrap;gap:.3rem">
       {% for b in bank_month_summary if b.spent > 0 %}
       <span class="pill" style="background:{{ b.color }}18;color:{{ b.color }};border:1px solid {{ b.color }}33">
-        <span class="dot" style="background:{{ b.color }}"></span>
-        {{ b.bank | capitalize }} {{ "%.0f" | format(b.spent) }}€
-      </span>
-      {% endfor %}
+        <span class="dot" style="background:{{ b.color }}"></span>{{ b.bank | capitalize }} {{ "%.0f" | format(b.spent) }}€
+      </span>{% endfor %}
     </div>
   </div>
 
   <div class="card" style="border-top:3px solid var(--green)">
-    <div class="card-label">Income this month</div>
-    <div class="card-value text-green">+{{ "%.2f" | format(total_income) }} €</div>
+    <div class="card-label">Income</div>
+    <div style="display:flex;align-items:baseline;gap:.6rem">
+      <div class="card-value text-green">+{{ "%.2f" | format(total_income) }} €</div>
+      {{ delta_badge(delta_income) }}
+    </div>
     <div class="card-meta" style="margin-top:.75rem;display:flex;flex-wrap:wrap;gap:.3rem">
       {% for b in bank_month_summary if b.income > 0 %}
       <span class="pill" style="background:{{ b.color }}18;color:{{ b.color }};border:1px solid {{ b.color }}33">
-        <span class="dot" style="background:{{ b.color }}"></span>
-        {{ b.bank | capitalize }} {{ "%.0f" | format(b.income) }}€
-      </span>
-      {% endfor %}
+        <span class="dot" style="background:{{ b.color }}"></span>{{ b.bank | capitalize }} {{ "%.0f" | format(b.income) }}€
+      </span>{% endfor %}
     </div>
   </div>
 
   <div class="card" style="border-top:3px solid {% if net >= 0 %}var(--green){% else %}var(--red){% endif %}">
     <div class="card-label">Net cashflow</div>
-    <div class="card-value {% if net >= 0 %}text-green{% else %}text-red{% endif %}">{{ "%.2f" | format(net) }} €</div>
+    <div style="display:flex;align-items:baseline;gap:.6rem">
+      <div class="card-value {% if net >= 0 %}text-green{% else %}text-red{% endif %}">{{ "%.2f" | format(net) }} €</div>
+      {{ delta_badge(delta_net, invert=(net < 0)) }}
+    </div>
     <div class="card-meta">{{ account_count }} accounts · {{ bank_month_summary | length }} banks</div>
   </div>
 
@@ -44,135 +88,90 @@
 <!-- ── Charts row 1 ── -->
 <div class="grid grid-2 mb-15">
   <div class="card">
-    <div class="card-section-title">Spending by Category <span class="text-muted fw-400" style="font-size:.7rem;text-transform:none;letter-spacing:0">this month</span></div>
+    <div class="card-section-title">Spending by Category</div>
     <div style="max-width:280px;margin:auto"><canvas id="catChart"></canvas></div>
   </div>
   <div class="card">
-    <div class="card-section-title">Spending by Bank <span class="text-muted fw-400" style="font-size:.7rem;text-transform:none;letter-spacing:0">this month</span></div>
+    <div class="card-section-title">Spending by Bank</div>
     <div style="max-width:280px;margin:auto"><canvas id="bankChart"></canvas></div>
   </div>
 </div>
 
 <!-- ── Monthly stacked ── -->
 <div class="card mb-15">
-  <div class="card-section-title">Monthly Expenses by Bank <span class="text-muted fw-400" style="font-size:.7rem;text-transform:none;letter-spacing:0">last 6 months</span></div>
+  <div class="card-section-title">Monthly Expenses by Bank <span class="text-muted" style="text-transform:none;letter-spacing:0;font-size:.7rem;font-weight:400">last 6 months</span></div>
   <canvas id="monthChart" style="max-height:280px"></canvas>
 </div>
 
 <!-- ── Tables ── -->
 <div class="grid grid-2">
-
   <div class="card">
     <div class="card-section-title">Top 10 Merchants</div>
     <table>
-      <thead>
-        <tr><th>#</th><th>Merchant</th><th>Bank</th><th class="text-right">Total €</th></tr>
-      </thead>
+      <thead><tr><th>#</th><th>Merchant</th><th>Bank</th><th class="text-right">€</th></tr></thead>
       <tbody>
         {% for m in top_merchants %}
         <tr>
           <td class="text-muted">{{ loop.index }}</td>
           <td class="fw-600">{{ m.name }}</td>
-          <td>
-            <span class="pill" style="background:{{ m.color }}18;color:{{ m.color }};border:1px solid {{ m.color }}33">
-              <span class="dot" style="background:{{ m.color }}"></span>
-              {{ m.bank | capitalize }}
-            </span>
-          </td>
+          <td><span class="pill" style="background:{{ m.color }}18;color:{{ m.color }};border:1px solid {{ m.color }}33">
+            <span class="dot" style="background:{{ m.color }}"></span>{{ m.bank | capitalize }}
+          </span></td>
           <td class="text-right text-red fw-600">{{ "%.2f" | format(m.total) }}</td>
-        </tr>
-        {% endfor %}
+        </tr>{% endfor %}
       </tbody>
     </table>
   </div>
-
   <div class="card">
     <div class="card-section-title">Recent Transactions</div>
     <table>
-      <thead>
-        <tr><th>Date</th><th>Bank</th><th>Merchant</th><th>Category</th><th class="text-right">€</th></tr>
-      </thead>
+      <thead><tr><th>Date</th><th>Bank</th><th>Merchant</th><th>Cat.</th><th class="text-right">€</th></tr></thead>
       <tbody>
         {% for txn, acc in recent %}
         <tr>
-          <td class="text-muted mono">{{ txn.booking_date }}</td>
-          <td>
-            <span class="pill" style="background:
-              {% if acc.bank == 'commerzbank' %}#e67e2218{% elif acc.bank == 'nordea' %}#3498db18{% elif acc.bank == 'hdfc' %}#e74c3c18{% elif acc.bank == 'sbi' %}#9b59b618{% else %}#95a5a618{% endif %};
-              color:{% if acc.bank == 'commerzbank' %}#e67e22{% elif acc.bank == 'nordea' %}#3498db{% elif acc.bank == 'hdfc' %}#e74c3c{% elif acc.bank == 'sbi' %}#9b59b6{% else %}#95a5a6{% endif %};
-              border:1px solid {% if acc.bank == 'commerzbank' %}#e67e2244{% elif acc.bank == 'nordea' %}#3498db44{% elif acc.bank == 'hdfc' %}#e74c3c44{% elif acc.bank == 'sbi' %}#9b59b644{% else %}#95a5a644{% endif %}">
-              {{ acc.bank | upper }}
-            </span>
-          </td>
-          <td style="max-width:160px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">
-            {{ txn.creditor_name or txn.debtor_name or "—" }}
-          </td>
-          <td class="text-muted">{{ txn.category or "—" }}</td>
-          <td class="text-right fw-600 {% if txn.amount >= 0 %}text-green{% else %}text-red{% endif %}">
-            {{ "%.2f" | format(txn.amount) }}
-          </td>
-        </tr>
-        {% endfor %}
+          <td class="mono text-muted" style="font-size:.75rem">{{ txn.booking_date }}</td>
+          <td><span class="pill" style="background:
+            {% if acc.bank=='commerzbank' %}#e67e2218{% elif acc.bank=='nordea' %}#3498db18{% elif acc.bank=='hdfc' %}#e74c3c18{% elif acc.bank=='sbi' %}#9b59b618{% else %}#95a5a618{% endif %};
+            color:{% if acc.bank=='commerzbank' %}#e67e22{% elif acc.bank=='nordea' %}#3498db{% elif acc.bank=='hdfc' %}#e74c3c{% elif acc.bank=='sbi' %}#9b59b6{% else %}#95a5a6{% endif %};
+            border:1px solid {% if acc.bank=='commerzbank' %}#e67e2244{% elif acc.bank=='nordea' %}#3498db44{% elif acc.bank=='hdfc' %}#e74c3c44{% elif acc.bank=='sbi' %}#9b59b644{% else %}#95a5a644{% endif %}">
+            {{ acc.bank | upper }}</span></td>
+          <td style="max-width:140px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:.8rem">
+            {{ txn.creditor_name or txn.debtor_name or "—" }}</td>
+          <td class="text-muted" style="font-size:.75rem">{{ txn.category or "—" }}</td>
+          <td class="text-right fw-600 {% if txn.amount >= 0 %}text-green{% else %}text-red{% endif %}" style="font-size:.8rem">
+            {{ "%.2f" | format(txn.amount) }}</td>
+        </tr>{% endfor %}
       </tbody>
     </table>
-    <div style="text-align:right;margin-top:.75rem">
-      <a href="{{ url_for('spending') }}" style="font-size:.8rem">Full breakdown →</a>
-    </div>
+    <div style="text-align:right;margin-top:.75rem"><a href="{{ url_for('spending') }}" style="font-size:.8rem">Full breakdown →</a></div>
   </div>
-
 </div>
 
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4/dist/chart.umd.min.js"></script>
 <script>
 const PAL = ['#6366f1','#10b981','#f59e0b','#ef4444','#3b82f6','#8b5cf6','#ec4899','#14b8a6','#f97316','#06b6d4'];
-
-const tooltipEur = { callbacks: { label: ctx => ` ${ctx.label || ctx.dataset.label}: €${(ctx.parsed.y ?? ctx.parsed ?? ctx.parsed.x).toFixed(2)}` }};
-
-new Chart(document.getElementById('catChart'), {
-  type: 'doughnut',
-  data: {
-    labels: {{ cat_labels | tojson }},
-    datasets: [{ data: {{ cat_values | tojson }}, backgroundColor: PAL, borderWidth: 2, borderColor: '#fff', hoverOffset: 4 }]
-  },
-  options: {
-    cutout: '65%',
-    plugins: {
-      legend: { position: 'bottom', labels: { boxWidth: 10, font: { size: 11 }, padding: 10 } },
-      tooltip: { callbacks: { label: ctx => ` ${ctx.label}: €${ctx.parsed.toFixed(2)}` } }
-    }
-  }
+const donutOpts = (labels, data, colors) => ({
+  type: 'doughnut', data: { labels, datasets: [{ data, backgroundColor: colors || PAL, borderWidth:2, borderColor:'#fff', hoverOffset:4 }] },
+  options: { cutout:'65%', plugins: { legend:{position:'bottom',labels:{boxWidth:10,font:{size:10},padding:8}}, tooltip:{callbacks:{label:ctx=>` ${ctx.label}: €${ctx.parsed.toFixed(2)}`}} } }
 });
-
-new Chart(document.getElementById('bankChart'), {
-  type: 'doughnut',
-  data: {
-    labels: {{ bank_donut_labels | tojson }},
-    datasets: [{ data: {{ bank_donut_values | tojson }}, backgroundColor: {{ bank_donut_colors | tojson }}, borderWidth: 2, borderColor: '#fff', hoverOffset: 4 }]
-  },
-  options: {
-    cutout: '65%',
-    plugins: {
-      legend: { position: 'bottom', labels: { boxWidth: 10, font: { size: 11 }, padding: 10 } },
-      tooltip: { callbacks: { label: ctx => ` ${ctx.label}: €${ctx.parsed.toFixed(2)}` } }
-    }
-  }
-});
-
+new Chart(document.getElementById('catChart'), donutOpts({{ cat_labels|tojson }}, {{ cat_values|tojson }}));
+new Chart(document.getElementById('bankChart'), donutOpts({{ bank_donut_labels|tojson }}, {{ bank_donut_values|tojson }}, {{ bank_donut_colors|tojson }}));
 new Chart(document.getElementById('monthChart'), {
-  type: 'bar',
-  data: { labels: {{ month_labels | tojson }}, datasets: {{ monthly_by_bank | tojson }} },
-  options: {
-    responsive: true,
-    scales: {
-      x: { stacked: true, grid: { display: false }, ticks: { font: { size: 11 } } },
-      y: { stacked: true, beginAtZero: true, grid: { color: '#f1f5f9' },
-           ticks: { callback: v => '€' + v, font: { size: 11 } } }
-    },
-    plugins: {
-      legend: { position: 'top', labels: { boxWidth: 10, font: { size: 11 }, padding: 12 } },
-      tooltip: { callbacks: { label: ctx => ` ${ctx.dataset.label}: €${ctx.parsed.y.toFixed(2)}` } }
-    }
-  }
+  type:'bar', data:{labels:{{ month_labels|tojson }}, datasets:{{ monthly_by_bank|tojson }}},
+  options:{ responsive:true, scales:{ x:{stacked:true,grid:{display:false},ticks:{font:{size:11}}}, y:{stacked:true,beginAtZero:true,grid:{color:'#f1f5f9'},ticks:{callback:v=>'€'+v,font:{size:11}}} },
+    plugins:{ legend:{position:'top',labels:{boxWidth:10,font:{size:11},padding:12}}, tooltip:{callbacks:{label:ctx=>` ${ctx.dataset.label}: €${ctx.parsed.y.toFixed(2)}`}} } }
 });
+
+// Date preset helpers
+const today = new Date().toISOString().split('T')[0];
+function setPreset(label, days) {
+  const now = new Date();
+  let from;
+  if (label === 'YTD') { from = new Date(now.getFullYear(), 0, 1); }
+  else { from = new Date(now); from.setDate(from.getDate() - days + 1); }
+  document.getElementById('df').value = from.toISOString().split('T')[0];
+  document.getElementById('dt').value = today;
+  document.getElementById('ff').submit();
+}
 </script>
 {% endblock %}

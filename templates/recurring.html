@@ -1,0 +1,129 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="page-header">
+  <h2>Recurring Payments</h2>
+  <p>Merchants appearing in 2+ distinct months — detected across all banks</p>
+</div>
+
+<!-- ── Summary cards ── -->
+<div class="grid grid-3 mb-15">
+  <div class="card" style="border-top:3px solid var(--red)">
+    <div class="card-label">Fixed subscriptions / mo</div>
+    <div class="card-value text-red">-{{ "%.2f" | format(monthly_fixed) }} €</div>
+    <div class="card-meta">{{ fixed | length }} recurring fixed charges</div>
+  </div>
+  <div class="card" style="border-top:3px solid #f59e0b">
+    <div class="card-label">All recurring expenses / mo</div>
+    <div class="card-value" style="color:#d97706">-{{ "%.2f" | format(monthly_all) }} €</div>
+    <div class="card-meta">{{ (fixed | length) + (variable | length) }} total recurring</div>
+  </div>
+  <div class="card" style="border-top:3px solid var(--green)">
+    <div class="card-label">Recurring income / mo</div>
+    <div class="card-value text-green">+{{ "%.2f" | format(monthly_income) }} €</div>
+    <div class="card-meta">{{ income | length }} regular income sources</div>
+  </div>
+</div>
+
+{% macro rec_table(items, show_next=true) %}
+<table>
+  <thead>
+    <tr>
+      <th>Merchant</th>
+      <th>Bank</th>
+      <th>Category</th>
+      <th class="text-right">Avg / mo</th>
+      <th class="text-right">Months</th>
+      <th class="text-right">Occurrences</th>
+      <th>Type</th>
+      <th>Last</th>
+      {% if show_next %}<th>Next expected</th>{% endif %}
+    </tr>
+  </thead>
+  <tbody>
+    {% for r in items %}
+    <tr>
+      <td class="fw-600">{{ r.merchant }}</td>
+      <td>
+        <span class="pill" style="background:{{ r.color }}18;color:{{ r.color }};border:1px solid {{ r.color }}33">
+          <span class="dot" style="background:{{ r.color }}"></span>{{ r.bank | capitalize }}
+        </span>
+      </td>
+      <td class="text-muted">{{ r.category }}</td>
+      <td class="text-right fw-600 text-red">{{ "%.2f" | format(r.avg_amount) }} €</td>
+      <td class="text-right text-muted">{{ r.months }}</td>
+      <td class="text-right text-muted">{{ r.occurrences }}</td>
+      <td>
+        {% if r.is_fixed %}
+          <span class="pill" style="background:#f0fdf4;color:#16a34a;border:1px solid #bbf7d0">Fixed</span>
+        {% else %}
+          <span class="pill" style="background:#fffbeb;color:#d97706;border:1px solid #fde68a">Variable</span>
+        {% endif %}
+      </td>
+      <td class="mono text-muted" style="font-size:.75rem">{{ r.last_date or "—" }}</td>
+      {% if show_next %}
+      <td class="mono" style="font-size:.75rem;{% if r.next_date and r.next_date.strftime('%Y-%m') <= '2026-05' %}color:var(--accent);font-weight:600{% else %}color:var(--text-3){% endif %}">
+        {{ r.next_date or "—" }}
+      </td>
+      {% endif %}
+    </tr>
+    {% else %}
+    <tr><td colspan="9" class="text-muted" style="text-align:center;padding:1.5rem">None detected</td></tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% endmacro %}
+
+<!-- ── Fixed subscriptions ── -->
+<div class="card mb-15">
+  <div class="card-section-title">
+    Fixed Subscriptions
+    <span style="margin-left:.5rem;font-size:.75rem;font-weight:400;color:var(--text-3);text-transform:none;letter-spacing:0">
+      consistent amount, monthly
+    </span>
+  </div>
+  {{ rec_table(fixed) }}
+</div>
+
+<!-- ── Variable recurring ── -->
+<div class="card mb-15">
+  <div class="card-section-title">
+    Variable Recurring
+    <span style="margin-left:.5rem;font-size:.75rem;font-weight:400;color:var(--text-3);text-transform:none;letter-spacing:0">
+      amount varies, but consistently repeats
+    </span>
+  </div>
+  {{ rec_table(variable) }}
+</div>
+
+<!-- ── Recurring income ── -->
+<div class="card">
+  <div class="card-section-title">Recurring Income</div>
+  {% macro income_table(items) %}
+  <table>
+    <thead>
+      <tr><th>Source</th><th>Bank</th><th>Category</th><th class="text-right">Avg / mo</th><th class="text-right">Months</th><th>Type</th><th>Last</th><th>Next expected</th></tr>
+    </thead>
+    <tbody>
+      {% for r in items %}
+      <tr>
+        <td class="fw-600">{{ r.merchant }}</td>
+        <td><span class="pill" style="background:{{ r.color }}18;color:{{ r.color }};border:1px solid {{ r.color }}33">
+          <span class="dot" style="background:{{ r.color }}"></span>{{ r.bank | capitalize }}
+        </span></td>
+        <td class="text-muted">{{ r.category }}</td>
+        <td class="text-right fw-600 text-green">+{{ "%.2f" | format(r.avg_amount) }} €</td>
+        <td class="text-right text-muted">{{ r.months }}</td>
+        <td>{% if r.is_fixed %}<span class="pill" style="background:#f0fdf4;color:#16a34a;border:1px solid #bbf7d0">Fixed</span>
+            {% else %}<span class="pill" style="background:#fffbeb;color:#d97706;border:1px solid #fde68a">Variable</span>{% endif %}</td>
+        <td class="mono text-muted" style="font-size:.75rem">{{ r.last_date or "—" }}</td>
+        <td class="mono" style="font-size:.75rem;color:var(--accent);font-weight:600">{{ r.next_date or "—" }}</td>
+      </tr>
+      {% else %}
+      <tr><td colspan="8" class="text-muted" style="text-align:center;padding:1.5rem">None detected</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% endmacro %}
+  {{ income_table(income) }}
+</div>
+{% endblock %}
