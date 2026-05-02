@@ -125,6 +125,48 @@
   </div>
 </div>
 
+<!-- ── Smart alerts ──────────────────────────────────────────────────────── -->
+{% if waste %}
+<div style="display:flex;flex-direction:column;gap:.625rem;margin-bottom:1.75rem">
+  {% for s in waste %}
+  <div style="display:flex;align-items:flex-start;gap:1rem;padding:1rem 1.25rem;
+    border-radius:var(--radius-sm);border:1px solid;
+    {% if s.severity == 'warning' %}background:#fffbeb;border-color:#fde68a{% else %}background:#f0f9ff;border-color:#bae6fd{% endif %}">
+    <span style="font-size:1.25rem;flex-shrink:0;margin-top:.05rem">
+      {% if s.type == 'redundant' %}⚠️{% elif s.type == 'price_creep' %}📈{% elif s.type == 'lapse' %}💤{% else %}💸{% endif %}
+    </span>
+    <div style="flex:1;min-width:0">
+      <div style="font-size:.875rem;font-weight:600;
+        {% if s.severity == 'warning' %}color:#92400e{% else %}color:#0c4a6e{% endif %}">
+        {{ s.message }}
+      </div>
+      {% if s.type == 'redundant' %}
+      <div style="display:flex;flex-wrap:wrap;gap:.375rem;margin-top:.5rem">
+        {% for svc in s.services %}
+        <span class="pill" style="background:#fff7ed;color:#c2410c;border:1px solid #fed7aa">
+          {{ svc.merchant }} · {{ svc.fmt }}/mo
+        </span>
+        {% endfor %}
+      </div>
+      {% elif s.type == 'price_creep' %}
+      <div style="font-size:.78rem;color:var(--text-2);margin-top:.3rem">
+        {{ s.early_fmt }} before &rarr; {{ s.recent_fmt }} now
+      </div>
+      {% elif s.type == 'lapse' and s.reason == 'transit_rideshare_overlap' %}
+      <div style="font-size:.78rem;color:var(--text-2);margin-top:.3rem">
+        {{ s.conflicting_count }} rides spotted in the last {{ s.window_days }} days
+      </div>
+      {% endif %}
+    </div>
+    <a href="{{ url_for('recurring') }}" style="font-size:.75rem;font-weight:600;
+      color:var(--accent);white-space:nowrap;flex-shrink:0;text-decoration:none;margin-top:.15rem">
+      Review →
+    </a>
+  </div>
+  {% endfor %}
+</div>
+{% endif %}
+
 <!-- ── How it works ──────────────────────────────────────────────────────── -->
 <div class="grid grid-3" style="margin-bottom:1.75rem">
   {% for icon, title, desc, color, bg in [

@@ -151,7 +151,7 @@ def _detect_waste(fixed, all_recurring, income, all_txns):
                                "fmt": _fmt(i["avg_amount"], i["merchant"])} for i in items],
                 "total_monthly": total,
                 "total_fmt": _fmt(total, items[0]["merchant"]),
-                "message": f"{len(items)} {cat} subscriptions — {_fmt(total, items[0]['merchant'])}/mo combined",
+                "message": f"Are you actually using all {len(items)}? You're paying for {', '.join(i['merchant'] for i in items)} every month.",
             })
 
     # ── 2. Price creep ────────────────────────────────────────────────────────
@@ -175,7 +175,7 @@ def _detect_waste(fixed, all_recurring, income, all_txns):
                     "early_fmt": _fmt(early_avg, r["merchant"]),
                     "recent_fmt": _fmt(recent_avg, r["merchant"]),
                     "pct_increase": round(pct, 1),
-                    "message": f"{r['merchant']} price went up {pct:.0f}% ({_fmt(early_avg, r['merchant'])} → {_fmt(recent_avg, r['merchant'])})",
+                    "message": f"Did you notice {r['merchant']} raised their price? You were paying {_fmt(early_avg, r['merchant'])} — now it's {_fmt(recent_avg, r['merchant'])}.",
                 })
 
     # ── 3. Correlation-based lapse ────────────────────────────────────────────
@@ -206,8 +206,7 @@ def _detect_waste(fixed, all_recurring, income, all_txns):
                 "conflicting_count": len(rideshare_txns),
                 "conflicting_amount": rideshare_total,
                 "window_days": 90,
-                "message": (f"{sub['merchant']} monthly pass + {len(rideshare_txns)} rideshare"
-                            f" rides in 90 days (€{rideshare_total}) — are you using transit?"),
+                "message": f"You have a {sub['merchant']} pass but took {len(rideshare_txns)} Uber or taxi rides recently. Are you still using the pass?",
             })
 
     gym_subs = [r for r in fixed
@@ -228,12 +227,15 @@ def _detect_waste(fixed, all_recurring, income, all_txns):
                 "reason": "gym_no_adjacent_spend",
                 "subscription_monthly": sub["avg_amount"],
                 "window_days": 90,
-                "message": f"{sub['merchant']} is active but no health/fitness purchases in 90 days",
+                "message": f"Your {sub['merchant']} membership is still charging. When did you last go?",
             })
 
     # ── 4. Subscription burden ────────────────────────────────────────────────
-    monthly_fixed_total = round(sum(r["avg_amount"] for r in fixed), 2)
-    monthly_income_avg  = round(sum(r["avg_amount"] for r in income), 2)
+    # Deduplicate by merchant name so the same sub on two bank accounts counts once
+    unique_fixed  = {r["merchant"]: r["avg_amount"] for r in fixed}
+    unique_income = {r["merchant"]: r["avg_amount"] for r in income}
+    monthly_fixed_total = round(sum(unique_fixed.values()), 2)
+    monthly_income_avg  = round(sum(unique_income.values()), 2)
     if monthly_income_avg > 0:
         pct = round(monthly_fixed_total / monthly_income_avg * 100, 1)
         # Determine dominant currency from income transactions
@@ -252,7 +254,7 @@ def _detect_waste(fixed, all_recurring, income, all_txns):
             "monthly_income_fmt": f"{inc_sym}{monthly_income_avg:.2f}",
             "pct": pct,
             "flagged": pct > 20,
-            "message": f"Fixed subscriptions are {pct}% of your monthly income",
+            "message": f"{inc_sym}{monthly_fixed_total:.2f} leaves your account automatically every month. Does that feel right?",
         })
 
     return signals
@@ -365,11 +367,17 @@ def index():
     account_count  = _acct_query().count()
     account_ids    = [a.id for a in _acct_query().with_entities(Account.id).all()]
     txn_count      = Transaction.query.filter(Transaction.account_id.in_(account_ids)).count() if account_ids else 0
+    waste = []
+    if active_conns > 0 and txn_count > 0:
+        expenses, income, all_txns = _detect_recurring()
+        fixed = [r for r in expenses if r["is_fixed"]]
+        waste = _detect_waste(fixed, expenses, income, all_txns)
     return render_template("index.html",
         connections=connections,
         active_conns=active_conns,
         account_count=account_count,
         txn_count=txn_count,
+        waste=waste,
     )
 
 
