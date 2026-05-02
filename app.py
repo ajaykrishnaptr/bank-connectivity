@@ -10,6 +10,7 @@ load_dotenv()
 import auth
 import categorize as cat
 import commerzbank_client
+import currency_utils
 import db_utils
 import nordea_client
 import psd2_client
@@ -203,8 +204,17 @@ def _fetch_and_store(bank, conn):
 @app.route("/")
 @login_required
 def index():
-    connections = {c.bank: c for c in BankConnection.query.filter_by(user_id=current_user.id).all()}
-    return render_template("index.html", connections=connections)
+    connections    = {c.bank: c for c in BankConnection.query.filter_by(user_id=current_user.id).all()}
+    active_conns   = sum(1 for c in connections.values() if c.status == "active")
+    account_count  = _acct_query().count()
+    account_ids    = [a.id for a in _acct_query().with_entities(Account.id).all()]
+    txn_count      = Transaction.query.filter(Transaction.account_id.in_(account_ids)).count() if account_ids else 0
+    return render_template("index.html",
+        connections=connections,
+        active_conns=active_conns,
+        account_count=account_count,
+        txn_count=txn_count,
+    )
 
 
 @app.route("/disconnect/<bank>")
@@ -281,33 +291,58 @@ def aggregation():
     from collections import defaultdict
 
     accounts = _acct_query().order_by(Account.bank, Account.id).all()
+    rates    = currency_utils.get_rates("EUR")
 
     rows = []
-    bank_totals = defaultdict(float)
-    for acc in accounts:
-        balance = sum(float(t.amount) for t in acc.transactions)
-        last_txn = max((t.booking_date for t in acc.transactions if t.booking_date), default=None)
-        rows.append({
-            "account":   acc,
-            "balance":   round(balance, 2),
-            "txn_count": len(acc.transactions),
-            "last_txn":  last_txn,
-            "color":     BANK_COLORS.get(acc.bank, "#95a5a6"),
-        })
-        bank_totals[acc.bank] += balance
+    bank_totals_eur = defaultdict(float)
+    currency_totals = defaultdict(float)   # original-currency totals per currency
 
-    total_balance = round(sum(r["balance"] for r in rows), 2)
+    for acc in accounts:
+        currency    = acc.currency or "EUR"
+        balance_nat = sum(float(t.amount) for t in acc.transactions)
+        balance_eur = currency_utils.to_eur(balance_nat, currency, rates)
+        last_txn    = max((t.booking_date for t in acc.transactions if t.booking_date), default=None)
+        is_foreign  = currency != "EUR"
+        rows.append({
+            "account":     acc,
+            "currency":    currency,
+            "balance_nat": round(balance_nat, 2),
+            "balance_eur": round(balance_eur, 2),
+            "is_foreign":  is_foreign,
+            "flag":        currency_utils.CURRENCY_FLAGS.get(currency, ""),
+            "txn_count":   len(acc.transactions),
+            "last_txn":    last_txn,
+            "color":       BANK_COLORS.get(acc.bank, "#95a5a6"),
+        })
+        bank_totals_eur[acc.bank] += balance_eur
+        currency_totals[currency] += balance_eur
+
+    total_balance_eur = round(sum(r["balance_eur"] for r in rows), 2)
+
     bank_summary = [
         {"bank": b, "total": round(t, 2), "color": BANK_COLORS.get(b, "#95a5a6")}
-        for b, t in sorted(bank_totals.items(), key=lambda x: -x[1])
+        for b, t in sorted(bank_totals_eur.items(), key=lambda x: -x[1])
     ]
 
-    chart_labels = [f"{r['account'].owner_name or r['account'].iban} ({r['account'].bank.upper()})" for r in rows]
-    chart_values = [r["balance"] for r in rows]
+    currency_summary = [
+        {"currency": c, "total_eur": round(v, 2),
+         "flag": currency_utils.CURRENCY_FLAGS.get(c, ""),
+         "pct": round(v / total_balance_eur * 100, 1) if total_balance_eur else 0}
+        for c, v in sorted(currency_totals.items(), key=lambda x: -x[1])
+    ]
+    multi_currency = len(currency_totals) > 1
+
+    chart_labels = [
+        f"{r['account'].owner_name or r['account'].iban} ({r['account'].bank.upper()})"
+        for r in rows
+    ]
+    chart_values = [r["balance_eur"] for r in rows]
     chart_colors = [r["color"] for r in rows]
 
     return render_template("aggregation.html",
-        rows=rows, bank_summary=bank_summary, total_balance=total_balance,
+        rows=rows, bank_summary=bank_summary, total_balance=total_balance_eur,
+        currency_summary=currency_summary, multi_currency=multi_currency,
+        rates_date=currency_utils.rates_updated_at(),
         chart_labels=chart_labels, chart_values=chart_values, chart_colors=chart_colors,
         account_count=len(rows),
     )

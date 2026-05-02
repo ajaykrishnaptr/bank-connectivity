@@ -1,35 +1,166 @@
 {% extends "base.html" %}
 {% block content %}
-<div style="max-width:420px;margin:3rem auto;">
-  <div class="card">
-    <div class="page-header">
-      <h2>Create account</h2>
-      <p>The first account registered becomes the TPP admin.</p>
+<style>
+  body { background: linear-gradient(135deg,#0a0818 0%,#1a1040 40%,#0d0a26 100%) !important; }
+  .page { max-width:100% !important; padding: 0 !important; }
+
+  .auth-wrap {
+    min-height: calc(100vh - 54px);
+    display: flex; align-items: center; justify-content: center;
+    padding: 2.5rem 1.5rem;
+  }
+
+  .auth-card {
+    width: 100%; max-width: 900px;
+    display: grid; grid-template-columns: 1fr 1fr;
+    border-radius: 20px; overflow: hidden;
+    box-shadow: 0 30px 100px rgba(0,0,0,.6), 0 0 0 1px rgba(255,255,255,.06);
+  }
+  @media (max-width: 720px) {
+    .auth-card { grid-template-columns: 1fr; }
+    .auth-brand-panel { display: none; }
+  }
+
+  .auth-brand-panel {
+    position: relative; overflow: hidden;
+    background: linear-gradient(155deg,#1e1455 0%,#2d1b69 50%,#0f0c29 100%);
+    padding: 2.75rem 2.5rem;
+    display: flex; flex-direction: column; justify-content: space-between;
+  }
+  .auth-brand-panel::before {
+    content: '';
+    position: absolute; inset: 0;
+    background-image:
+      linear-gradient(rgba(99,102,241,.08) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(99,102,241,.08) 1px, transparent 1px);
+    background-size: 36px 36px;
+    animation: gridDrift 25s linear infinite;
+    pointer-events: none;
+  }
+  @keyframes gridDrift { to { transform: translateY(36px); } }
+
+  .orb {
+    position: absolute; border-radius: 50%;
+    filter: blur(70px); pointer-events: none; animation: pulse 6s ease-in-out infinite alternate;
+  }
+  @keyframes pulse { from { opacity: .6; transform: scale(1); } to { opacity: 1; transform: scale(1.08); } }
+
+  .auth-form-panel {
+    background: #fff;
+    padding: 2.75rem 2.5rem;
+    display: flex; align-items: center;
+  }
+  .auth-form-inner { width: 100%; }
+
+  .fi-label {
+    display: block; font-size: .8125rem; font-weight: 600;
+    color: #374151; margin-bottom: .45rem;
+  }
+  .fi-input {
+    width: 100%; padding: .7rem .9rem;
+    border: 1.5px solid #e5e7eb; border-radius: 9px;
+    font-size: .9375rem; font-family: inherit; color: #111827;
+    background: #f9fafb; outline: none;
+    transition: border-color .15s, box-shadow .15s, background .15s;
+  }
+  .fi-input:focus {
+    border-color: #6366f1; background: #fff;
+    box-shadow: 0 0 0 3.5px rgba(99,102,241,.14);
+  }
+  .fi-input::placeholder { color: #9ca3af; }
+
+  .fi-submit {
+    width: 100%; padding: .8rem;
+    background: linear-gradient(135deg,#6366f1,#7c3aed);
+    color: #fff; border: none; border-radius: 9px;
+    font-size: .9375rem; font-weight: 600; font-family: inherit;
+    cursor: pointer; letter-spacing: -.01em;
+    box-shadow: 0 4px 18px rgba(99,102,241,.38);
+    transition: opacity .15s, box-shadow .15s, transform .1s;
+  }
+  .fi-submit:hover { opacity: .92; box-shadow: 0 6px 24px rgba(99,102,241,.5); }
+  .fi-submit:active { transform: scale(.99); }
+</style>
+
+<div class="auth-wrap">
+  <div class="auth-card">
+
+    <!-- ── Brand Panel ───────────────────────── -->
+    <div class="auth-brand-panel">
+      <div class="orb" style="top:-80px;left:-80px;width:320px;height:320px;background:rgba(99,102,241,.3)"></div>
+      <div class="orb" style="bottom:-60px;right:-40px;width:260px;height:260px;background:rgba(124,58,237,.25);animation-delay:3s"></div>
+
+      <div style="position:relative;z-index:1">
+        <div style="display:flex;align-items:center;gap:.75rem;margin-bottom:2.5rem">
+          <div style="width:42px;height:42px;border-radius:12px;background:linear-gradient(135deg,#6366f1,#7c3aed);display:flex;align-items:center;justify-content:center;font-size:13px;font-weight:800;color:#fff;box-shadow:0 8px 24px rgba(99,102,241,.5)">FN</div>
+          <div>
+            <div style="font-size:1.0625rem;font-weight:800;letter-spacing:-.025em;color:#fff">FintNet</div>
+            <div style="font-size:.6rem;font-weight:500;color:rgba(255,255,255,.4);letter-spacing:.08em;text-transform:uppercase">Bank Integrations</div>
+          </div>
+        </div>
+
+        <h2 style="font-size:1.875rem;font-weight:800;letter-spacing:-.04em;line-height:1.2;color:#fff;margin-bottom:.875rem">
+          Start connecting<br>
+          <span style="background:linear-gradient(90deg,#a5b4fc,#c4b5fd);-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text">your banks today.</span>
+        </h2>
+        <p style="font-size:.8375rem;color:rgba(255,255,255,.55);line-height:1.75;max-width:300px">
+          Create your free account and get a complete view of your finances in minutes.
+        </p>
+      </div>
+
+      <div style="position:relative;z-index:1">
+        <div style="display:flex;flex-direction:column;gap:.5rem;margin-bottom:1.25rem">
+          {% for step, text in [
+            ('1', 'Create your free account'),
+            ('2', 'Connect your bank in seconds'),
+            ('3', 'See all your money in one place'),
+          ] %}
+          <div style="display:flex;align-items:center;gap:.875rem">
+            <div style="width:26px;height:26px;border-radius:50%;background:linear-gradient(135deg,#6366f1,#7c3aed);display:flex;align-items:center;justify-content:center;font-size:.7rem;font-weight:800;color:#fff;flex-shrink:0">{{ step }}</div>
+            <span style="font-size:.8125rem;font-weight:500;color:rgba(255,255,255,.75)">{{ text }}</span>
+          </div>
+          {% endfor %}
+        </div>
+      </div>
     </div>
-    <form method="POST" action="{{ url_for('signup') }}" style="display:flex;flex-direction:column;gap:1rem;margin-top:1.25rem;">
-      <div>
-        <label style="font-size:.8125rem;font-weight:500;color:var(--text-2);display:block;margin-bottom:.35rem;">Email</label>
-        <input type="email" name="email" required autocomplete="email"
-          style="width:100%;padding:.55rem .75rem;border:1px solid var(--border);border-radius:var(--radius-sm);font-size:.875rem;font-family:inherit;outline:none;transition:border-color .15s;"
-          onfocus="this.style.borderColor='var(--accent)'" onblur="this.style.borderColor='var(--border)'">
+
+    <!-- ── Form Panel ────────────────────────── -->
+    <div class="auth-form-panel">
+      <div class="auth-form-inner">
+        <div style="margin-bottom:2rem">
+          <h2 style="font-size:1.625rem;font-weight:800;color:#0f172a;letter-spacing:-.03em;margin-bottom:.35rem">Create account</h2>
+          <p style="font-size:.8375rem;color:#64748b">Join FintNet — free, secure, instant access</p>
+        </div>
+
+        <form method="POST" action="{{ url_for('signup') }}" style="display:flex;flex-direction:column;gap:1.125rem">
+          <div>
+            <label class="fi-label">Email address</label>
+            <input class="fi-input" type="email" name="email" required autocomplete="email" placeholder="you@example.com">
+          </div>
+          <div>
+            <label class="fi-label">Password <span style="color:#9ca3af;font-weight:400">(min 8 characters)</span></label>
+            <input class="fi-input" type="password" name="password" required autocomplete="new-password" placeholder="••••••••">
+          </div>
+          <div>
+            <label class="fi-label">Confirm password</label>
+            <input class="fi-input" type="password" name="password2" required autocomplete="new-password" placeholder="••••••••">
+          </div>
+          <button type="submit" class="fi-submit" style="margin-top:.25rem">Create FintNet account</button>
+        </form>
+
+        <p style="text-align:center;margin-top:1.5rem;font-size:.8125rem;color:#94a3b8">
+          Already have an account?
+          <a href="{{ url_for('login') }}" style="color:#6366f1;font-weight:600;text-decoration:none">Sign in →</a>
+        </p>
+
+        <div style="margin-top:2rem;padding-top:1.5rem;border-top:1px solid #f1f5f9;text-align:center">
+          <p style="font-size:.75rem;color:#94a3b8;line-height:1.6">
+            Free forever &mdash; no credit card needed. Your data stays private and secure.
+          </p>
+        </div>
       </div>
-      <div>
-        <label style="font-size:.8125rem;font-weight:500;color:var(--text-2);display:block;margin-bottom:.35rem;">Password <span style="color:var(--text-3);font-weight:400;">(min 8 chars)</span></label>
-        <input type="password" name="password" required autocomplete="new-password"
-          style="width:100%;padding:.55rem .75rem;border:1px solid var(--border);border-radius:var(--radius-sm);font-size:.875rem;font-family:inherit;outline:none;transition:border-color .15s;"
-          onfocus="this.style.borderColor='var(--accent)'" onblur="this.style.borderColor='var(--border)'">
-      </div>
-      <div>
-        <label style="font-size:.8125rem;font-weight:500;color:var(--text-2);display:block;margin-bottom:.35rem;">Confirm password</label>
-        <input type="password" name="password2" required autocomplete="new-password"
-          style="width:100%;padding:.55rem .75rem;border:1px solid var(--border);border-radius:var(--radius-sm);font-size:.875rem;font-family:inherit;outline:none;transition:border-color .15s;"
-          onfocus="this.style.borderColor='var(--accent)'" onblur="this.style.borderColor='var(--border)'">
-      </div>
-      <button type="submit" class="btn btn-primary" style="margin-top:.25rem;">Create account</button>
-    </form>
-    <p style="text-align:center;margin-top:1.25rem;font-size:.8125rem;color:var(--text-3);">
-      Already have an account? <a href="{{ url_for('login') }}">Sign in</a>
-    </p>
+    </div>
+
   </div>
 </div>
 {% endblock %}

@@ -46,15 +46,17 @@ USERS = [
     {
         "email":      "arjun.mehta@testbank.eu",
         "owner_name": "Arjun Mehta",
-        "salary":     ("SAP SE",            3500, 4000),
+        "salary":     ("SAP SE",            38000, 44000),   # SEK salary (~3500–4000 EUR)
         "banks": {
             "nordea": {
                 "access_token": "seeded-nordea-arjun",
+                "currency": "SEK",
+                "fx": 11.2,   # approximate EUR→SEK rate used for seeding
                 "accounts": [
-                    {"resource_id": "N-ARJUN-CUR", "iban": "FI5542345670000081",
-                     "name": "Current Account", "currency": "EUR"},
-                    {"resource_id": "N-ARJUN-SAV", "iban": "FI1350001540000056",
-                     "name": "Savings Account",  "currency": "EUR"},
+                    {"resource_id": "N-ARJUN-CUR", "iban": "SE3550000000054910000003",
+                     "name": "Lönekonto", "currency": "SEK"},
+                    {"resource_id": "N-ARJUN-SAV", "iban": "SE6780000810340967640001",
+                     "name": "Sparkonto",  "currency": "SEK"},
                 ],
             },
         },
@@ -143,17 +145,17 @@ def _last_6_months():
     return months
 
 
-def _txn(bank, account_id, d, amount, creditor, debtor, info, category):
+def _txn(bank, account_id, d, amount, creditor, debtor, info, category, currency="EUR", fx=1.0):
     return Transaction(
         bank=bank, account_id=account_id,
         booking_date=d, value_date=d,
-        amount=round(amount, 2), currency="EUR",
+        amount=round(amount * fx, 2), currency=currency,
         creditor_name=creditor, debtor_name=debtor,
         remittance_info=info, status="booked", category=category,
     )
 
 
-def generate_current(bank, account_id, salary):
+def generate_current(bank, account_id, salary, currency="EUR", fx=1.0):
     """Generate 6 months of realistic transactions for a current account."""
     sal_name, sal_min, sal_max = salary
     txns = []
@@ -165,7 +167,8 @@ def generate_current(bank, account_id, salary):
         if d <= TODAY:
             txns.append(_txn(bank, account_id, d,
                              random.uniform(sal_min, sal_max),
-                             "", sal_name, "Monthly salary", "Income"))
+                             "", sal_name, "Monthly salary", "Income",
+                             currency=currency, fx=1.0))  # salary already in native currency
 
         # Rent (1st)
         d = date(year, month, 1)
@@ -173,14 +176,15 @@ def generate_current(bank, account_id, salary):
             merchant, base, _, category = RENT
             txns.append(_txn(bank, account_id, d,
                              -random.uniform(base - 30, base + 30),
-                             merchant, "", f"Miete {year}/{month:02d}", category))
+                             merchant, "", f"Hyra {year}/{month:02d}" if currency != "EUR" else f"Miete {year}/{month:02d}",
+                             category, currency=currency, fx=fx))
 
         # Fixed recurring
         for merchant, amount, day, category in RECURRING:
             d = date(year, month, min(day, 28))
             if d <= TODAY:
                 txns.append(_txn(bank, account_id, d, -amount,
-                                 merchant, "", "", category))
+                                 merchant, "", "", category, currency=currency, fx=fx))
 
         # Variable expenses (14–22 per month)
         for _ in range(random.randint(14, 22)):
@@ -189,7 +193,7 @@ def generate_current(bank, account_id, salary):
             if d <= TODAY:
                 txns.append(_txn(bank, account_id, d,
                                  -random.uniform(mn, mx),
-                                 merchant, "", "", category))
+                                 merchant, "", "", category, currency=currency, fx=fx))
 
         # ~30% chance of extra income
         if random.random() < 0.30:
@@ -198,12 +202,12 @@ def generate_current(bank, account_id, salary):
             if d <= TODAY:
                 txns.append(_txn(bank, account_id, d,
                                  random.uniform(mn, mx),
-                                 "", name, "", "Income"))
+                                 "", name, "", "Income", currency=currency, fx=fx))
 
     return txns
 
 
-def generate_savings(bank, account_id):
+def generate_savings(bank, account_id, currency="EUR", fx=1.0):
     """Generate monthly deposits into a savings account."""
     txns = []
     for year, month in _last_6_months():
@@ -211,7 +215,8 @@ def generate_savings(bank, account_id):
         if d <= TODAY:
             txns.append(_txn(bank, account_id, d,
                              random.uniform(200, 600),
-                             "", "Own Transfer", "Monthly savings deposit", "Transfer"))
+                             "", "Own Transfer", "Monthly savings deposit", "Transfer",
+                             currency=currency, fx=fx))
     return txns
 
 
@@ -254,6 +259,9 @@ with app.app_context():
             )
             db.session.add(conn)
 
+            bank_currency = bank_data.get("currency", "EUR")
+            bank_fx       = bank_data.get("fx", 1.0)
+
             for i, acc_data in enumerate(bank_data["accounts"]):
                 acc = Account(
                     bank=bank,
@@ -269,9 +277,11 @@ with app.app_context():
 
                 is_current = i == 0
                 if is_current:
-                    txns = generate_current(bank, acc.id, u_data["salary"])
+                    txns = generate_current(bank, acc.id, u_data["salary"],
+                                            currency=bank_currency, fx=bank_fx)
                 else:
-                    txns = generate_savings(bank, acc.id)
+                    txns = generate_savings(bank, acc.id,
+                                            currency=bank_currency, fx=bank_fx)
 
                 db.session.add_all(txns)
                 total_txns += len(txns)

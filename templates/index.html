@@ -1,55 +1,267 @@
 {% extends "base.html" %}
 {% block content %}
-<div class="page-header">
-  <h2>Connected Banks</h2>
-  <p>Connect your bank accounts. You'll be redirected to your bank to authorise access.</p>
+<style>
+  /* ── Hero animations ────── */
+  @keyframes heroFloat {
+    0%,100% { transform: translateY(0) rotate(0deg); }
+    50%      { transform: translateY(-12px) rotate(1deg); }
+  }
+  @keyframes blobPulse {
+    0%,100% { transform: scale(1); opacity: .55; }
+    50%      { transform: scale(1.12); opacity: .75; }
+  }
+  @keyframes shimmer {
+    0%   { background-position: -200% center; }
+    100% { background-position: 200% center; }
+  }
+  @keyframes countUp {
+    from { opacity: 0; transform: translateY(8px); }
+    to   { opacity: 1; transform: translateY(0); }
+  }
+  .stat-num { animation: countUp .5s ease both; }
+  .stat-num:nth-child(2) { animation-delay: .1s; }
+  .stat-num:nth-child(3) { animation-delay: .2s; }
+
+  /* ── Bank card hover ────── */
+  .bank-card {
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: var(--radius); overflow: hidden;
+    display: flex; flex-direction: column;
+    box-shadow: var(--shadow);
+    transition: box-shadow .25s, transform .25s;
+  }
+  .bank-card:hover {
+    box-shadow: var(--shadow-lg);
+    transform: translateY(-3px);
+  }
+
+  /* ── Feature strip ────── */
+  .feature-card {
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: var(--radius); padding: 1.375rem 1.5rem;
+    box-shadow: var(--shadow);
+    display: flex; align-items: flex-start; gap: 1rem;
+    transition: box-shadow .2s, transform .2s;
+  }
+  .feature-card:hover { box-shadow: var(--shadow-md); transform: translateY(-2px); }
+  .feature-icon {
+    width: 44px; height: 44px; border-radius: 12px; flex-shrink: 0;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 1.25rem;
+  }
+</style>
+
+<!-- ── Hero ──────────────────────────────────────────────────────────────── -->
+<div style="
+  position: relative; overflow: hidden;
+  background: linear-gradient(135deg, #0f0c29 0%, #1e1455 40%, #2d1b69 70%, #1a0f3c 100%);
+  border-radius: 20px; padding: 3.5rem 3rem; margin-bottom: 1.75rem; color: #fff;
+">
+  <!-- Animated background grid -->
+  <div style="position:absolute;inset:0;background-image:linear-gradient(rgba(99,102,241,.07) 1px,transparent 1px),linear-gradient(90deg,rgba(99,102,241,.07) 1px,transparent 1px);background-size:44px 44px;animation:heroFloat 20s linear infinite;pointer-events:none"></div>
+
+  <!-- Glow orbs -->
+  <div style="position:absolute;top:-120px;right:-80px;width:400px;height:400px;border-radius:50%;background:radial-gradient(circle,rgba(99,102,241,.35) 0%,transparent 70%);animation:blobPulse 8s ease-in-out infinite;pointer-events:none"></div>
+  <div style="position:absolute;bottom:-80px;left:25%;width:300px;height:300px;border-radius:50%;background:radial-gradient(circle,rgba(124,58,237,.28) 0%,transparent 70%);animation:blobPulse 10s ease-in-out infinite 2s;pointer-events:none"></div>
+
+  <div style="position:relative;z-index:1;max-width:720px">
+
+    <!-- Status badge -->
+    <div style="display:inline-flex;align-items:center;gap:.5rem;background:rgba(255,255,255,.08);border:1px solid rgba(255,255,255,.15);border-radius:20px;padding:.325rem 1rem;margin-bottom:2rem">
+      <span style="width:7px;height:7px;border-radius:50%;background:#34d399;box-shadow:0 0 8px rgba(52,211,153,.8)"></span>
+      <span style="font-size:.6875rem;font-weight:700;letter-spacing:.1em;text-transform:uppercase;opacity:.9">Secure &nbsp;·&nbsp; Real-time &nbsp;·&nbsp; Free</span>
+    </div>
+
+    <h1 style="font-size:2.625rem;font-weight:900;letter-spacing:-.05em;line-height:1.1;margin-bottom:1rem">
+      All your banks.<br>
+      <span style="background:linear-gradient(90deg,#a5b4fc 0%,#c4b5fd 50%,#fbcfe8 100%);background-size:200% auto;-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text;animation:shimmer 4s linear infinite">
+        One dashboard.
+      </span>
+    </h1>
+
+    <p style="font-size:.9625rem;line-height:1.75;opacity:.72;margin-bottom:2.5rem;max-width:540px">
+      Connect your bank accounts once and get a complete picture of your finances &mdash;
+      balances, transactions, and spending patterns, all in one place and updated automatically.
+      Your bank login is <strong style="opacity:1;font-weight:700">never shared with us</strong>.
+    </p>
+
+    {% if active_conns > 0 %}
+    <div style="display:flex;align-items:center;gap:2.5rem;flex-wrap:wrap">
+      {% for val, label, color in [
+        (active_conns,   'Banks connected',   '#a5b4fc'),
+        (account_count,  'Accounts synced',   '#6ee7b7'),
+        (txn_count,      'Transactions',      '#fde68a'),
+      ] %}
+      <div class="stat-num">
+        <div style="font-size:2.25rem;font-weight:900;letter-spacing:-.05em;line-height:1;color:{{ color }}">{{ val }}</div>
+        <div style="font-size:.75rem;opacity:.6;margin-top:.25rem;font-weight:500">{{ label }}</div>
+      </div>
+      {% if not loop.last %}
+      <div style="width:1px;height:40px;background:rgba(255,255,255,.12)"></div>
+      {% endif %}
+      {% endfor %}
+    </div>
+
+    <div style="margin-top:2rem">
+      <a href="{{ url_for('dashboard') }}" style="
+        display:inline-flex;align-items:center;gap:.6rem;
+        background:linear-gradient(135deg,#6366f1,#7c3aed);color:#fff;
+        padding:.7rem 1.625rem;border-radius:10px;font-size:.875rem;font-weight:700;
+        box-shadow:0 6px 20px rgba(99,102,241,.45);text-decoration:none;
+        transition:opacity .15s,transform .15s;letter-spacing:-.01em
+      " onmouseover="this.style.opacity='.9'" onmouseout="this.style.opacity='1'">
+        Open Dashboard
+        <svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><path d="M5 12h14M12 5l7 7-7 7"/></svg>
+      </a>
+    </div>
+
+    {% else %}
+    <div style="display:inline-flex;align-items:center;gap:.75rem;background:rgba(255,255,255,.07);border:1px solid rgba(255,255,255,.12);border-radius:10px;padding:.75rem 1.25rem">
+      <svg width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" style="opacity:.65;flex-shrink:0"><path d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+      <span style="font-size:.8375rem;opacity:.8">Connect your first bank below to get started.</span>
+    </div>
+    {% endif %}
+
+  </div>
 </div>
 
+<!-- ── How it works ──────────────────────────────────────────────────────── -->
+<div class="grid grid-3" style="margin-bottom:1.75rem">
+  {% for icon, title, desc, color, bg in [
+    ('🔐', 'Your password stays private',  'You log in directly at your own bank — FintNet never sees your credentials. Safe by design.',  '#6366f1', '#eef2ff'),
+    ('⚡',  'Updates automatically',        'The moment you connect, your accounts and transactions sync instantly. No manual refreshing.',  '#10b981', '#f0fdf4'),
+    ('📊',  'Understand your money',        'See where you spend, spot recurring bills, and track your total balance across all accounts.',  '#f59e0b', '#fffbeb'),
+  ] %}
+  <div class="feature-card">
+    <div class="feature-icon" style="background:{{ bg }};color:{{ color }}">{{ icon }}</div>
+    <div>
+      <div style="font-size:.875rem;font-weight:700;color:var(--text);margin-bottom:.3rem">{{ title }}</div>
+      <div style="font-size:.78rem;color:var(--text-3);line-height:1.6">{{ desc }}</div>
+    </div>
+  </div>
+  {% endfor %}
+</div>
+
+<!-- ── Bank integrations header ──────────────────────────────────────────── -->
+<div style="display:flex;align-items:center;gap:1rem;margin-bottom:1.25rem">
+  <div style="font-size:.6875rem;font-weight:700;text-transform:uppercase;letter-spacing:.1em;color:var(--text-3);white-space:nowrap">
+    Supported Banks
+  </div>
+  <div style="flex:1;height:1px;background:var(--border)"></div>
+  <div style="font-size:.75rem;color:var(--text-3)">Connect one or all three</div>
+</div>
+
+<!-- ── Bank cards ────────────────────────────────────────────────────────── -->
 <div class="grid grid-3">
 
-  {% for bank_id, label, color, desc, connect_url in [
-    ('unicredit',   'UniCredit',   '#c0392b', 'mTLS with eIDAS QWAC certificate. Requires sandbox onboarding.', url_for('unicredit_connect')),
-    ('commerzbank', 'Commerzbank', '#e67e22', 'OAuth2 sandbox token. No certificate required — ready to use.',  url_for('commerzbank_connect')),
-    ('nordea',      'Nordea',      '#3498db', 'OAuth2 authorization code flow. Finland, Sweden, Norway, Denmark.', url_for('nordea_connect'))
-  ] %}
+{% for bank_id, label, color, country, desc, connect_url in [
+  ('unicredit',   'UniCredit',   '#c0392b', 'Italy',
+   'See all your UniCredit accounts and transactions in one place. Balances updated automatically.',
+   url_for('unicredit_connect')),
+  ('commerzbank', 'Commerzbank', '#e67e22', 'Germany',
+   'Link your Commerzbank account and get a full view of your spending and balance at a glance.',
+   url_for('commerzbank_connect')),
+  ('nordea',      'Nordea',      '#3498db', 'Finland · Sweden · Norway · Denmark',
+   'Connect your Nordea account from anywhere in Scandinavia and track everything in one dashboard.',
+   url_for('nordea_connect')),
+] %}
 
-  {% set conn = connections.get(bank_id) %}
+{% set conn = connections.get(bank_id) %}
 
-  <div class="card" style="border-top: 3px solid {{ color }}">
-    <div style="display:flex;align-items:center;gap:.75rem;margin-bottom:1rem">
-      <div style="width:40px;height:40px;border-radius:10px;background:{{ color }}18;
+<div class="bank-card" style="border-top:3px solid {{ color }}">
+
+  <!-- Header -->
+  <div style="padding:1.5rem 1.5rem 1rem">
+    <div style="display:flex;align-items:center;gap:.875rem;margin-bottom:1.125rem">
+      <div style="width:46px;height:46px;border-radius:13px;
+        background:{{ color }}15;border:1px solid {{ color }}25;
         display:flex;align-items:center;justify-content:center;
-        font-size:1rem;font-weight:800;color:{{ color }}">
+        font-size:1.125rem;font-weight:900;color:{{ color }};flex-shrink:0;
+        box-shadow:0 4px 12px {{ color }}20">
         {{ label[0] }}
       </div>
       <div>
-        <div style="font-size:.9375rem;font-weight:700;color:var(--text)">{{ label }}</div>
-        <div style="font-size:.7rem;color:var(--text-3)">Open Banking Sandbox</div>
+        <div style="font-size:.9375rem;font-weight:800;color:var(--text);letter-spacing:-.02em;line-height:1.2">{{ label }}</div>
+        <div style="font-size:.6875rem;color:var(--text-3);margin-top:.125rem">{{ country }}</div>
       </div>
     </div>
-    <p style="font-size:.8125rem;color:var(--text-2);margin-bottom:1.25rem;line-height:1.5">{{ desc }}</p>
 
+    <p style="font-size:.79rem;color:var(--text-3);line-height:1.65;margin-bottom:1.125rem">{{ desc }}</p>
+
+    <div style="display:flex;gap:.375rem;flex-wrap:wrap">
+      {% for chip in ['Accounts', 'Transactions', 'Balances'] %}
+      <span style="font-size:.6rem;font-weight:600;letter-spacing:.04em;
+        padding:.2rem .55rem;border-radius:20px;
+        background:{{ color }}10;color:{{ color }};border:1px solid {{ color }}25">
+        {{ chip }}
+      </span>
+      {% endfor %}
+    </div>
+  </div>
+
+  <!-- Footer / CTA -->
+  <div style="margin-top:auto;border-top:1px solid var(--border);padding:1.125rem 1.5rem;background:var(--surface-2)">
     {% if conn and conn.status == 'active' %}
-      <div style="display:flex;align-items:center;gap:.5rem;margin-bottom:.75rem">
-        <span style="width:8px;height:8px;border-radius:50%;background:var(--green);display:inline-block"></span>
-        <span style="font-size:.75rem;font-weight:600;color:var(--green)">Connected</span>
-        <span style="font-size:.7rem;color:var(--text-3);margin-left:auto">
-          {{ conn.connected_at.strftime('%d %b %Y') if conn.connected_at }}
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:.875rem">
+        <div style="display:flex;align-items:center;gap:.5rem">
+          <span style="width:8px;height:8px;border-radius:50%;background:var(--green);box-shadow:0 0 0 3px #d1fae5;display:inline-block;flex-shrink:0"></span>
+          <span style="font-size:.75rem;font-weight:700;color:var(--green)">Connected</span>
+        </div>
+        <span style="font-size:.7rem;color:var(--text-3)">
+          Since {{ conn.connected_at.strftime('%d %b %Y') if conn.connected_at }}
         </span>
       </div>
-      <a href="{{ url_for('disconnect', bank=bank_id) }}" role="button" class="secondary" style="width:100%">Disconnect</a>
+      <a href="{{ url_for('disconnect', bank=bank_id) }}"
+        style="display:block;width:100%;text-align:center;padding:.5rem;
+          border-radius:var(--radius-sm);font-size:.8125rem;font-weight:600;
+          color:var(--text-3);border:1px solid var(--border);background:var(--surface);
+          text-decoration:none;transition:background .15s,color .15s"
+        onmouseover="this.style.background='#fef2f2';this.style.color='#dc2626';this.style.borderColor='#fecaca'"
+        onmouseout="this.style.background='var(--surface)';this.style.color='var(--text-3)';this.style.borderColor='var(--border)'">
+        Disconnect
+      </a>
+
     {% elif conn and conn.status == 'expired' %}
-      <div style="display:flex;align-items:center;gap:.5rem;margin-bottom:.75rem">
-        <span style="width:8px;height:8px;border-radius:50%;background:#f59e0b;display:inline-block"></span>
-        <span style="font-size:.75rem;font-weight:600;color:#92400e">Token Expired</span>
+      <div style="display:flex;align-items:center;gap:.5rem;margin-bottom:.875rem">
+        <span style="width:8px;height:8px;border-radius:50%;background:var(--amber);display:inline-block"></span>
+        <span style="font-size:.75rem;font-weight:600;color:#92400e">Session expired — reconnect to resume</span>
       </div>
-      <a href="{{ connect_url }}" role="button" style="width:100%;background:{{ color }};border-color:{{ color }}">Reconnect {{ label }}</a>
+      <a href="{{ connect_url }}"
+        style="display:block;width:100%;text-align:center;padding:.55rem;
+          border-radius:var(--radius-sm);font-size:.8375rem;font-weight:700;
+          color:#fff;background:{{ color }};text-decoration:none;
+          box-shadow:0 4px 12px {{ color }}40;transition:opacity .15s"
+        onmouseover="this.style.opacity='.88'" onmouseout="this.style.opacity='1'">
+        Reconnect {{ label }}
+      </a>
+
     {% else %}
-      <a href="{{ connect_url }}" role="button" style="width:100%;background:{{ color }};border-color:{{ color }}">Connect {{ label }}</a>
+      <div style="display:flex;align-items:center;gap:.5rem;margin-bottom:.875rem">
+        <span style="width:8px;height:8px;border-radius:50%;background:var(--border);display:inline-block"></span>
+        <span style="font-size:.75rem;color:var(--text-3)">Not connected</span>
+      </div>
+      <a href="{{ connect_url }}"
+        style="display:block;width:100%;text-align:center;padding:.55rem;
+          border-radius:var(--radius-sm);font-size:.8375rem;font-weight:700;
+          color:#fff;background:{{ color }};text-decoration:none;
+          box-shadow:0 4px 12px {{ color }}35;transition:opacity .15s,transform .1s"
+        onmouseover="this.style.opacity='.88'" onmouseout="this.style.opacity='1'">
+        Connect {{ label }}
+      </a>
     {% endif %}
   </div>
 
-  {% endfor %}
-
 </div>
+{% endfor %}
+</div>
+
+<!-- ── Footer note ───────────────────────────────────────────────────────── -->
+<div style="margin-top:2rem;text-align:center;padding:1.25rem;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);box-shadow:var(--shadow)">
+  <div style="font-size:.75rem;color:var(--text-3);line-height:1.7">
+    <span style="font-weight:600;color:var(--text-2)">FintNet</span> connects to your banks using the same security standards your bank does.
+    Your login credentials are <strong style="color:var(--text-2)">never stored or shared</strong> &mdash;
+    you always authorise directly at your bank.
+  </div>
+</div>
+
 {% endblock %}

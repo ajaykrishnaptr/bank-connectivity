@@ -1,6 +1,6 @@
-# Bank Connectivity
+# FintNet — Financial Institutions Integration Network
 
-A multi-tenant PSD2 Open Banking app. Users connect their European bank accounts via OAuth2 consent flows. The TPP fetches and stores accounts and transactions, and provides spending analytics, balance aggregation, and recurring payment detection.
+Connect European bank accounts in one place. FintNet fetches accounts, balances, and transactions via secure bank APIs and presents a unified view — including cross-border, multi-currency consolidation.
 
 ---
 
@@ -9,7 +9,7 @@ A multi-tenant PSD2 Open Banking app. Users connect their European bank accounts
 **Multi-tenant auth**
 - Flask-Login with email + password
 - Every user sees only their own data
-- `role` column exists in the DB for future TPP admin panel (unused for now)
+- `role` column in DB for future TPP admin panel (unused for now)
 
 **Bank connections**
 - `BankConnection` table stores token/consent per user per bank — persistent across sessions
@@ -20,21 +20,24 @@ A multi-tenant PSD2 Open Banking app. Users connect their European bank accounts
 **Analytics** — all scoped to the logged-in user
 - Dashboard — spending/income overview, MoM deltas, top merchants, 6-month trend
 - Spending — category breakdown with per-bank splits
-- Balances — account aggregation across all connected banks
+- Balances — multi-bank aggregation with live currency conversion to EUR
 - Recurring — auto-detected fixed and variable recurring payments
+
+**Cross-border currency support** (`currency_utils.py`)
+- Fetches live exchange rates from `frankfurter.app` (European Central Bank data)
+- Rates cached in-memory for 1 hour; falls back to hardcoded ECB approximates if API is down
+- All non-EUR account balances converted to EUR on the Balances page
+- Currency breakdown card shows each currency's share of total net worth
 
 ---
 
 ## Banks integrated
 
-| Bank | Auth method | Status |
-|------|-------------|--------|
-| Nordea | OAuth2 authorization_code — user redirected to bank, sandbox auto-approves | Ready |
-| Commerzbank | OAuth2 client_credentials + static sandbox consent | Ready — no redirect needed |
-| UniCredit | mTLS + API consent + SCA redirect | Requires sandbox onboarding |
-
-**How the consent flow works (PSD2 model):**
-The user picks their bank in the TPP app and is redirected to the bank's own login page. They authenticate at the bank — the TPP never sees their bank password. The bank issues an authorization code, the TPP exchanges it for an access token, and fetches the user's accounts and transactions. Commerzbank uses a TPP-level OAuth token + a pre-approved sandbox consent instead of a per-user redirect.
+| Bank | Country | Status |
+|------|---------|--------|
+| Nordea | Finland, Sweden, Norway, Denmark | Ready |
+| Commerzbank | Germany | Ready — no redirect needed |
+| UniCredit | Italy | Requires sandbox onboarding |
 
 ---
 
@@ -50,7 +53,7 @@ Visit: http://127.0.0.1:5000
 
 ## Seeding test data
 
-Populates the DB with 3 test users, bank connections, accounts, and 6 months of transactions. Safe to re-run — clears and recreates test data each time.
+Populates the DB with 3 test users, bank connections, accounts, and ~6 months of transactions. Safe to re-run — clears and recreates test data each time.
 
 ```bash
 python3 seed_data.py
@@ -62,15 +65,17 @@ python3 seed_data.py
 
 All accounts use password: **`TestPass123`**
 
-| Name | Email | Banks | Transactions |
-|------|-------|-------|-------------|
-| Priya Sharma | `priya.sharma@testbank.eu` | Nordea + Commerzbank | ~278 |
-| Arjun Mehta | `arjun.mehta@testbank.eu` | Nordea only | ~140 |
-| Kavya Reddy | `kavya.reddy@testbank.eu` | Commerzbank only | ~144 |
+| Name | Email | Banks | Currency |
+|------|-------|-------|----------|
+| Priya Sharma | `priya.sharma@testbank.eu` | Nordea FI + Commerzbank DE | EUR |
+| Arjun Mehta | `arjun.mehta@testbank.eu` | Nordea SE | SEK |
+| Kavya Reddy | `kavya.reddy@testbank.eu` | Commerzbank DE | EUR |
 
-**Priya Sharma** — 4 accounts (2 Nordea FI, 2 Commerzbank DE), salary from Siemens AG ~€4,200/mo
-**Arjun Mehta** — 2 accounts (2 Nordea FI), salary from SAP SE ~€3,750/mo
-**Kavya Reddy** — 2 accounts (2 Commerzbank DE), salary from Deutsche Bank AG ~€4,400/mo
+**Priya Sharma** — 4 accounts (2 Nordea Finland, 2 Commerzbank Germany), salary from Siemens AG ~€4,200/mo. Good demo for multi-bank, single-currency.
+
+**Arjun Mehta** — 2 Swedish Nordea accounts (`Lönekonto` + `Sparkonto`) in SEK, salary from SAP SE ~38,000–44,000 SEK/mo. Best demo for cross-border currency conversion.
+
+**Kavya Reddy** — 2 Commerzbank Germany accounts, salary from Deutsche Bank AG ~€4,400/mo.
 
 Each current account includes:
 - Monthly salary credit (1st–5th of month)
@@ -82,13 +87,9 @@ Each current account includes:
 
 ## What's next
 
+- Expat view — side-by-side comparison of accounts across two countries for users who live cross-border
+- Subscription intelligence — detect unused subscriptions and alert the user
+- Tax category tagging — flag deductible expenses per country for freelancers
 - TPP admin panel (`role` column already in DB)
-- Commerzbank proper per-user `create_consent()` redirect flow for production
 - Token refresh / expiry handling — mark connection as `expired`, show Reconnect button
 - Background data sync — periodic re-fetch of transactions per active connection
-
----
-
-## Sandbox limitations
-
-Bank data from sandbox APIs is synthetic — not tied to real user accounts. Seeded users bypass the consent flow entirely; data is inserted directly into the DB. Real bank connections (via the Connect page) work on top of seeded data.

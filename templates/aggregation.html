@@ -1,62 +1,117 @@
 {% extends "base.html" %}
 {% block content %}
+
 <div class="page-header">
-  <h2>Multi-Bank Balances</h2>
-  <p>Balances computed from transaction history across all connected banks</p>
+  <h2>My Money
+    <span class="subtitle">everything in one number</span>
+  </h2>
+  {% if multi_currency %}
+  <p>You hold accounts in multiple currencies &mdash; all converted to euros for a unified view.</p>
+  {% else %}
+  <p>Balances computed from transaction history across all connected banks.</p>
+  {% endif %}
 </div>
 
-<!-- ── Net worth + bank cards ── -->
-<div class="grid grid-4 mb-15">
+<!-- ── Hero total ─────────────────────────────────────────────────────────── -->
+<div style="
+  background: linear-gradient(135deg,#0f0c29 0%,#1e1455 50%,#2d1b69 100%);
+  border-radius: 18px; padding: 2.5rem 2.5rem 2rem; margin-bottom: 1.5rem;
+  color: #fff; position: relative; overflow: hidden;
+">
+  <div style="position:absolute;top:-80px;right:-60px;width:280px;height:280px;border-radius:50%;background:radial-gradient(circle,rgba(99,102,241,.35) 0%,transparent 70%);pointer-events:none"></div>
 
-  <div class="card" style="text-align:center;border-top:3px solid var(--accent)">
-    <div class="card-label">Total Net Worth</div>
-    <div class="card-value {% if total_balance >= 0 %}text-green{% else %}text-red{% endif %}">
-      {{ "%.2f" | format(total_balance) }} €
+  <div style="position:relative;z-index:1;display:flex;align-items:flex-end;justify-content:space-between;flex-wrap:wrap;gap:1.5rem">
+    <div>
+      <div style="font-size:.75rem;font-weight:700;text-transform:uppercase;letter-spacing:.1em;opacity:.55;margin-bottom:.5rem">
+        Total across all accounts
+      </div>
+      <div style="font-size:3rem;font-weight:900;letter-spacing:-.05em;line-height:1;
+        {% if total_balance >= 0 %}color:#6ee7b7{% else %}color:#fca5a5{% endif %}">
+        €{{ "%.2f" | format(total_balance) }}
+      </div>
+      <div style="font-size:.8rem;opacity:.5;margin-top:.5rem">
+        {{ account_count }} account{{ 's' if account_count != 1 }} &nbsp;·&nbsp; {{ bank_summary | length }} bank{{ 's' if bank_summary | length != 1 }}
+        {% if multi_currency %}&nbsp;·&nbsp; {{ currency_summary | length }} currencies{% endif %}
+      </div>
     </div>
-    <div class="card-meta">{{ account_count }} accounts · {{ bank_summary | length }} banks</div>
-  </div>
 
-  {% for b in bank_summary %}
-  <div class="card" style="border-top:3px solid {{ b.color }}">
-    <div class="card-label">{{ b.bank | capitalize }}</div>
-    <div class="card-value" style="color:{{ b.color }};font-size:1.625rem">
-      {{ "%.2f" | format(b.total) }} €
-    </div>
-    <div class="progress-track" style="margin-top:.75rem">
-      {% if total_balance != 0 %}
-      <div class="progress-fill" style="background:{{ b.color }};width:{{ [((b.total / total_balance) * 100) | round | int, 0] | max }}%"></div>
+    <!-- Per-bank totals -->
+    <div style="display:flex;gap:1.25rem;flex-wrap:wrap">
+      {% for b in bank_summary %}
+      <div style="text-align:right">
+        <div style="font-size:.65rem;font-weight:700;text-transform:uppercase;letter-spacing:.08em;opacity:.5;margin-bottom:.25rem">{{ b.bank | capitalize }}</div>
+        <div style="font-size:1.375rem;font-weight:800;letter-spacing:-.03em;color:{{ b.color }}">
+          €{{ "%.2f" | format(b.total) }}
+        </div>
+      </div>
+      {% if not loop.last %}
+      <div style="width:1px;height:40px;background:rgba(255,255,255,.12);align-self:center"></div>
       {% endif %}
-    </div>
-    <div class="card-meta">
-      {% if total_balance != 0 %}{{ ((b.total / total_balance) * 100) | round(1) }}% of total{% endif %}
+      {% endfor %}
     </div>
   </div>
-  {% endfor %}
-
 </div>
 
-<!-- ── Balance chart ── -->
+<!-- ── Currency breakdown (only shown for multi-currency users) ──────────── -->
+{% if multi_currency %}
+<div class="card mb-15" style="border-left:3px solid var(--accent)">
+  <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:1rem;flex-wrap:wrap;gap:.5rem">
+    <div class="card-section-title" style="margin-bottom:0">Currency Breakdown</div>
+    <div style="font-size:.7rem;color:var(--text-3)">
+      Rates from European Central Bank &nbsp;·&nbsp; Updated {{ rates_date }}
+    </div>
+  </div>
+  <div style="display:flex;gap:1.5rem;flex-wrap:wrap;align-items:center">
+    {% for c in currency_summary %}
+    <div style="display:flex;align-items:center;gap:.75rem;padding:.75rem 1.25rem;
+      background:var(--bg);border-radius:var(--radius-sm);border:1px solid var(--border)">
+      <span style="font-size:1.5rem">{{ c.flag }}</span>
+      <div>
+        <div style="font-size:.75rem;font-weight:700;color:var(--text)">{{ c.currency }}</div>
+        <div style="font-size:.9375rem;font-weight:800;color:var(--text);letter-spacing:-.02em">€{{ "%.2f" | format(c.total_eur) }}</div>
+        <div style="font-size:.65rem;color:var(--text-3)">{{ c.pct }}% of total</div>
+      </div>
+      <!-- mini bar -->
+      <div style="width:60px">
+        <div class="progress-track">
+          <div class="progress-fill" style="background:var(--accent);width:{{ c.pct }}%"></div>
+        </div>
+      </div>
+    </div>
+    {% if not loop.last %}
+    <div style="font-size:1.25rem;color:var(--text-3)">+</div>
+    {% endif %}
+    {% endfor %}
+    <div style="font-size:.8rem;color:var(--text-3);max-width:260px;line-height:1.5">
+      All non-euro balances converted to EUR at today's rate for comparison.
+    </div>
+  </div>
+</div>
+{% endif %}
+
+<!-- ── Balance chart ─────────────────────────────────────────────────────── -->
 <div class="card mb-15">
-  <div class="card-section-title">Balance per Account</div>
-  <canvas id="balanceChart" style="max-height:320px"></canvas>
+  <div class="card-section-title">Balance per Account <span style="text-transform:none;letter-spacing:0;font-size:.7rem;font-weight:400;color:var(--text-3)">(shown in EUR)</span></div>
+  <canvas id="balanceChart" style="max-height:300px"></canvas>
 </div>
 
-<!-- ── Account table ── -->
+<!-- ── Account table ─────────────────────────────────────────────────────── -->
 <div class="card">
-  <div class="card-section-title">Account Details</div>
+  <div class="card-section-title">All Accounts</div>
   <table>
     <thead>
       <tr>
         <th>Owner</th>
         <th>Bank</th>
         <th>Account</th>
-        <th class="text-right">Balance €</th>
+        <th class="text-right">Balance</th>
+        {% if multi_currency %}<th class="text-right">In EUR</th>{% endif %}
         <th class="text-right">Transactions</th>
         <th>Last Activity</th>
       </tr>
     </thead>
     <tbody>
-      {% for r in rows | sort(attribute='balance', reverse=True) %}
+      {% for r in rows | sort(attribute='balance_eur', reverse=True) %}
       <tr>
         <td class="fw-600">{{ r.account.owner_name or "—" }}</td>
         <td>
@@ -66,9 +121,21 @@
           </span>
         </td>
         <td class="mono text-muted" style="font-size:.75rem">{{ r.account.iban }}</td>
-        <td class="text-right fw-600 {% if r.balance >= 0 %}text-green{% else %}text-red{% endif %}">
-          {{ "%.2f" | format(r.balance) }}
+        <td class="text-right fw-700 {% if r.balance_nat >= 0 %}text-green{% else %}text-red{% endif %}">
+          {% if r.is_foreign %}
+            <span style="font-size:.7rem;margin-right:.3rem;opacity:.8">{{ r.flag }} {{ r.currency }}</span>
+          {% endif %}
+          {{ "%.2f" | format(r.balance_nat) }}
         </td>
+        {% if multi_currency %}
+        <td class="text-right text-muted" style="font-size:.8rem">
+          {% if r.is_foreign %}
+            ≈ €{{ "%.2f" | format(r.balance_eur) }}
+          {% else %}
+            <span style="opacity:.4">—</span>
+          {% endif %}
+        </td>
+        {% endif %}
         <td class="text-right text-muted">{{ r.txn_count }}</td>
         <td class="text-muted mono" style="font-size:.75rem">{{ r.last_txn or "—" }}</td>
       </tr>
@@ -76,10 +143,11 @@
     </tbody>
     <tfoot>
       <tr>
-        <th colspan="3">Total</th>
+        <th colspan="{% if multi_currency %}3{% else %}3{% endif %}">Total (EUR)</th>
         <th class="text-right {% if total_balance >= 0 %}text-green{% else %}text-red{% endif %}">
-          {{ "%.2f" | format(total_balance) }}
+          €{{ "%.2f" | format(total_balance) }}
         </th>
+        {% if multi_currency %}<th></th>{% endif %}
         <th colspan="2"></th>
       </tr>
     </tfoot>
