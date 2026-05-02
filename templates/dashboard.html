@@ -1,0 +1,178 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="page-header">
+  <h2>Dashboard <span class="subtitle">{{ current_month }}</span></h2>
+</div>
+
+<!-- ── Summary cards ── -->
+<div class="grid grid-3 mb-15">
+
+  <div class="card" style="border-top:3px solid var(--red)">
+    <div class="card-label">Spent this month</div>
+    <div class="card-value text-red">-{{ "%.2f" | format(total_spent) }} €</div>
+    <div class="card-meta" style="margin-top:.75rem;display:flex;flex-wrap:wrap;gap:.3rem">
+      {% for b in bank_month_summary if b.spent > 0 %}
+      <span class="pill" style="background:{{ b.color }}18;color:{{ b.color }};border:1px solid {{ b.color }}33">
+        <span class="dot" style="background:{{ b.color }}"></span>
+        {{ b.bank | capitalize }} {{ "%.0f" | format(b.spent) }}€
+      </span>
+      {% endfor %}
+    </div>
+  </div>
+
+  <div class="card" style="border-top:3px solid var(--green)">
+    <div class="card-label">Income this month</div>
+    <div class="card-value text-green">+{{ "%.2f" | format(total_income) }} €</div>
+    <div class="card-meta" style="margin-top:.75rem;display:flex;flex-wrap:wrap;gap:.3rem">
+      {% for b in bank_month_summary if b.income > 0 %}
+      <span class="pill" style="background:{{ b.color }}18;color:{{ b.color }};border:1px solid {{ b.color }}33">
+        <span class="dot" style="background:{{ b.color }}"></span>
+        {{ b.bank | capitalize }} {{ "%.0f" | format(b.income) }}€
+      </span>
+      {% endfor %}
+    </div>
+  </div>
+
+  <div class="card" style="border-top:3px solid {% if net >= 0 %}var(--green){% else %}var(--red){% endif %}">
+    <div class="card-label">Net cashflow</div>
+    <div class="card-value {% if net >= 0 %}text-green{% else %}text-red{% endif %}">{{ "%.2f" | format(net) }} €</div>
+    <div class="card-meta">{{ account_count }} accounts · {{ bank_month_summary | length }} banks</div>
+  </div>
+
+</div>
+
+<!-- ── Charts row 1 ── -->
+<div class="grid grid-2 mb-15">
+  <div class="card">
+    <div class="card-section-title">Spending by Category <span class="text-muted fw-400" style="font-size:.7rem;text-transform:none;letter-spacing:0">this month</span></div>
+    <div style="max-width:280px;margin:auto"><canvas id="catChart"></canvas></div>
+  </div>
+  <div class="card">
+    <div class="card-section-title">Spending by Bank <span class="text-muted fw-400" style="font-size:.7rem;text-transform:none;letter-spacing:0">this month</span></div>
+    <div style="max-width:280px;margin:auto"><canvas id="bankChart"></canvas></div>
+  </div>
+</div>
+
+<!-- ── Monthly stacked ── -->
+<div class="card mb-15">
+  <div class="card-section-title">Monthly Expenses by Bank <span class="text-muted fw-400" style="font-size:.7rem;text-transform:none;letter-spacing:0">last 6 months</span></div>
+  <canvas id="monthChart" style="max-height:280px"></canvas>
+</div>
+
+<!-- ── Tables ── -->
+<div class="grid grid-2">
+
+  <div class="card">
+    <div class="card-section-title">Top 10 Merchants</div>
+    <table>
+      <thead>
+        <tr><th>#</th><th>Merchant</th><th>Bank</th><th class="text-right">Total €</th></tr>
+      </thead>
+      <tbody>
+        {% for m in top_merchants %}
+        <tr>
+          <td class="text-muted">{{ loop.index }}</td>
+          <td class="fw-600">{{ m.name }}</td>
+          <td>
+            <span class="pill" style="background:{{ m.color }}18;color:{{ m.color }};border:1px solid {{ m.color }}33">
+              <span class="dot" style="background:{{ m.color }}"></span>
+              {{ m.bank | capitalize }}
+            </span>
+          </td>
+          <td class="text-right text-red fw-600">{{ "%.2f" | format(m.total) }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+
+  <div class="card">
+    <div class="card-section-title">Recent Transactions</div>
+    <table>
+      <thead>
+        <tr><th>Date</th><th>Bank</th><th>Merchant</th><th>Category</th><th class="text-right">€</th></tr>
+      </thead>
+      <tbody>
+        {% for txn, acc in recent %}
+        <tr>
+          <td class="text-muted mono">{{ txn.booking_date }}</td>
+          <td>
+            <span class="pill" style="background:
+              {% if acc.bank == 'commerzbank' %}#e67e2218{% elif acc.bank == 'nordea' %}#3498db18{% elif acc.bank == 'hdfc' %}#e74c3c18{% elif acc.bank == 'sbi' %}#9b59b618{% else %}#95a5a618{% endif %};
+              color:{% if acc.bank == 'commerzbank' %}#e67e22{% elif acc.bank == 'nordea' %}#3498db{% elif acc.bank == 'hdfc' %}#e74c3c{% elif acc.bank == 'sbi' %}#9b59b6{% else %}#95a5a6{% endif %};
+              border:1px solid {% if acc.bank == 'commerzbank' %}#e67e2244{% elif acc.bank == 'nordea' %}#3498db44{% elif acc.bank == 'hdfc' %}#e74c3c44{% elif acc.bank == 'sbi' %}#9b59b644{% else %}#95a5a644{% endif %}">
+              {{ acc.bank | upper }}
+            </span>
+          </td>
+          <td style="max-width:160px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">
+            {{ txn.creditor_name or txn.debtor_name or "—" }}
+          </td>
+          <td class="text-muted">{{ txn.category or "—" }}</td>
+          <td class="text-right fw-600 {% if txn.amount >= 0 %}text-green{% else %}text-red{% endif %}">
+            {{ "%.2f" | format(txn.amount) }}
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    <div style="text-align:right;margin-top:.75rem">
+      <a href="{{ url_for('spending') }}" style="font-size:.8rem">Full breakdown →</a>
+    </div>
+  </div>
+
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4/dist/chart.umd.min.js"></script>
+<script>
+const PAL = ['#6366f1','#10b981','#f59e0b','#ef4444','#3b82f6','#8b5cf6','#ec4899','#14b8a6','#f97316','#06b6d4'];
+
+const tooltipEur = { callbacks: { label: ctx => ` ${ctx.label || ctx.dataset.label}: €${(ctx.parsed.y ?? ctx.parsed ?? ctx.parsed.x).toFixed(2)}` }};
+
+new Chart(document.getElementById('catChart'), {
+  type: 'doughnut',
+  data: {
+    labels: {{ cat_labels | tojson }},
+    datasets: [{ data: {{ cat_values | tojson }}, backgroundColor: PAL, borderWidth: 2, borderColor: '#fff', hoverOffset: 4 }]
+  },
+  options: {
+    cutout: '65%',
+    plugins: {
+      legend: { position: 'bottom', labels: { boxWidth: 10, font: { size: 11 }, padding: 10 } },
+      tooltip: { callbacks: { label: ctx => ` ${ctx.label}: €${ctx.parsed.toFixed(2)}` } }
+    }
+  }
+});
+
+new Chart(document.getElementById('bankChart'), {
+  type: 'doughnut',
+  data: {
+    labels: {{ bank_donut_labels | tojson }},
+    datasets: [{ data: {{ bank_donut_values | tojson }}, backgroundColor: {{ bank_donut_colors | tojson }}, borderWidth: 2, borderColor: '#fff', hoverOffset: 4 }]
+  },
+  options: {
+    cutout: '65%',
+    plugins: {
+      legend: { position: 'bottom', labels: { boxWidth: 10, font: { size: 11 }, padding: 10 } },
+      tooltip: { callbacks: { label: ctx => ` ${ctx.label}: €${ctx.parsed.toFixed(2)}` } }
+    }
+  }
+});
+
+new Chart(document.getElementById('monthChart'), {
+  type: 'bar',
+  data: { labels: {{ month_labels | tojson }}, datasets: {{ monthly_by_bank | tojson }} },
+  options: {
+    responsive: true,
+    scales: {
+      x: { stacked: true, grid: { display: false }, ticks: { font: { size: 11 } } },
+      y: { stacked: true, beginAtZero: true, grid: { color: '#f1f5f9' },
+           ticks: { callback: v => '€' + v, font: { size: 11 } } }
+    },
+    plugins: {
+      legend: { position: 'top', labels: { boxWidth: 10, font: { size: 11 }, padding: 12 } },
+      tooltip: { callbacks: { label: ctx => ` ${ctx.dataset.label}: €${ctx.parsed.y.toFixed(2)}` } }
+    }
+  }
+});
+</script>
+{% endblock %}

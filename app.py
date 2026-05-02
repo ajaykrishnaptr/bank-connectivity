@@ -6,9 +6,20 @@ from flask import Flask, flash, redirect, render_template, request, session, url
 load_dotenv()
 
 import auth
+import categorize as cat
 import commerzbank_client
+import db_utils
 import nordea_client
 import psd2_client
+from models import Transaction, db
+
+BANK_COLORS = {
+    "commerzbank": "#e67e22",
+    "nordea":      "#3498db",
+    "hdfc":        "#e74c3c",
+    "sbi":         "#9b59b6",
+    "unicredit":   "#c0392b",
+}
 
 app = Flask(__name__)
 app.secret_key = os.getenv("FLASK_SECRET_KEY", "dev-secret")
@@ -16,6 +27,19 @@ app.config["SANDBOX_BASE_URL"] = os.getenv("SANDBOX_BASE_URL", "https://develope
 app.config["REDIRECT_URI"] = os.getenv("REDIRECT_URI", "http://localhost:5000/callback")
 app.config["CB_REDIRECT_URI"] = os.getenv("CB_REDIRECT_URI", "http://localhost:5000/commerzbank/callback")
 app.config["NORDEA_REDIRECT_URI"] = os.getenv("NORDEA_REDIRECT_URI", "http://localhost:5000/nordea/callback")
+app.config["SQLALCHEMY_DATABASE_URI"] = os.getenv("DATABASE_URL", "postgresql://localhost/ais_db")
+app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
+
+db.init_app(app)
+
+with app.app_context():
+    db.create_all()
+    # Backfill category for any rows that predate the column
+    uncategorized = Transaction.query.filter(Transaction.category.is_(None)).all()
+    for t in uncategorized:
+        t.category = cat.categorize(t.creditor_name or t.debtor_name or "")
+    if uncategorized:
+        db.session.commit()
 
 
 # ── Home ─────────────────────────────────────────────────────────────────────
@@ -30,6 +54,240 @@ def disconnect():
     session.clear()
     flash("Disconnected.", "info")
     return redirect(url_for("index"))
+
+
+# ── Analytics ────────────────────────────────────────────────────────────────
+
+@app.route("/aggregation")
+def aggregation():
+    from collections import defaultdict
+    from models import Account
+
+    accounts = (
+        db.session.query(Account)
+        .order_by(Account.bank, Account.id)
+        .all()
+    )
+
+    BANK_COLORS = {
+        "commerzbank": "#e67e22",
+        "nordea":      "#3498db",
+        "hdfc":        "#e74c3c",
+        "sbi":         "#9b59b6",
+        "unicredit":   "#c0392b",
+    }
+
+    rows = []
+    bank_totals = defaultdict(float)
+    for acc in accounts:
+        balance = sum(float(t.amount) for t in acc.transactions)
+        last_txn = max((t.booking_date for t in acc.transactions if t.booking_date), default=None)
+        rows.append({
+            "account":    acc,
+            "balance":    round(balance, 2),
+            "txn_count":  len(acc.transactions),
+            "last_txn":   last_txn,
+            "color":      BANK_COLORS.get(acc.bank, "#95a5a6"),
+        })
+        bank_totals[acc.bank] += balance
+
+    total_balance = round(sum(r["balance"] for r in rows), 2)
+    bank_summary = [
+        {"bank": b, "total": round(t, 2), "color": BANK_COLORS.get(b, "#95a5a6")}
+        for b, t in sorted(bank_totals.items(), key=lambda x: -x[1])
+    ]
+
+    chart_labels  = [f"{r['account'].owner_name or r['account'].iban} ({r['account'].bank.upper()})" for r in rows]
+    chart_values  = [r["balance"] for r in rows]
+    chart_colors  = [r["color"] for r in rows]
+
+    return render_template("aggregation.html",
+        rows=rows,
+        bank_summary=bank_summary,
+        total_balance=total_balance,
+        chart_labels=chart_labels,
+        chart_values=chart_values,
+        chart_colors=chart_colors,
+        account_count=len(rows),
+    )
+
+
+@app.route("/dashboard")
+def dashboard():
+    from collections import defaultdict
+    from datetime import date
+    from models import Account
+
+    today = date.today()
+    cy, cm = today.year, today.month
+
+    all_rows = (
+        db.session.query(Transaction, Account)
+        .join(Account, Transaction.account_id == Account.id)
+        .filter(Transaction.status == "booked")
+        .all()
+    )
+    all_banks = sorted(set(a.bank for _, a in all_rows))
+
+    this_month = [(t, a) for t, a in all_rows
+                  if t.booking_date and t.booking_date.year == cy and t.booking_date.month == cm]
+
+    total_spent  = abs(sum(float(t.amount) for t, _ in this_month if t.amount < 0))
+    total_income = sum(float(t.amount) for t, _ in this_month if t.amount > 0)
+    net          = total_income - total_spent
+
+    # Per-bank spend/income this month
+    bank_month = defaultdict(lambda: {"spent": 0.0, "income": 0.0})
+    for t, a in this_month:
+        if t.amount < 0:
+            bank_month[a.bank]["spent"] += abs(float(t.amount))
+        else:
+            bank_month[a.bank]["income"] += float(t.amount)
+    bank_month_summary = [
+        {"bank": b, "spent": round(v["spent"], 2), "income": round(v["income"], 2),
+         "color": BANK_COLORS.get(b, "#95a5a6")}
+        for b, v in sorted(bank_month.items(), key=lambda x: -x[1]["spent"])
+    ]
+
+    # Category donut (current month, all banks)
+    cat_totals = defaultdict(float)
+    for t, _ in this_month:
+        if t.amount < 0:
+            cat_totals[t.category or "Other"] += abs(float(t.amount))
+    cat_sorted = sorted(cat_totals.items(), key=lambda x: -x[1])
+
+    # Bank spending donut (current month)
+    bank_spent_month = [(b, round(v["spent"], 2)) for b, v in bank_month.items() if v["spent"] > 0]
+    bank_spent_month.sort(key=lambda x: -x[1])
+
+    # Last 6 months — stacked by bank
+    months = []
+    y, m = cy, cm
+    for _ in range(6):
+        months.insert(0, (y, m))
+        m -= 1
+        if m == 0:
+            m, y = 12, y - 1
+    month_labels = [date(y, m, 1).strftime("%b %Y") for y, m in months]
+
+    monthly_by_bank = []
+    for bank in all_banks:
+        data = []
+        for y, m in months:
+            amt = round(abs(sum(
+                float(t.amount) for t, a in all_rows
+                if a.bank == bank and t.booking_date
+                and t.booking_date.year == y and t.booking_date.month == m
+                and t.amount < 0
+            )), 2)
+            data.append(amt)
+        monthly_by_bank.append({
+            "label": bank.capitalize(),
+            "data": data,
+            "backgroundColor": BANK_COLORS.get(bank, "#95a5a6") + "cc",
+            "borderColor": BANK_COLORS.get(bank, "#95a5a6"),
+            "borderWidth": 1,
+            "stack": "expenses",
+        })
+
+    # Top 10 merchants with bank
+    merchant_key = defaultdict(lambda: {"total": 0.0, "bank": ""})
+    for t, a in all_rows:
+        if t.amount < 0:
+            name = t.creditor_name or t.debtor_name or "Unknown"
+            k = (name, a.bank)
+            merchant_key[k]["total"] += abs(float(t.amount))
+            merchant_key[k]["bank"] = a.bank
+    top_merchants = sorted(
+        [{"name": k[0], "bank": k[1], "color": BANK_COLORS.get(k[1], "#95a5a6"),
+          "total": round(v["total"], 2)} for k, v in merchant_key.items()],
+        key=lambda x: -x["total"]
+    )[:10]
+
+    # Recent 15 transactions
+    recent = sorted(
+        [(t, a) for t, a in all_rows if t.booking_date],
+        key=lambda x: x[0].booking_date, reverse=True
+    )[:15]
+
+    return render_template("dashboard.html",
+        current_month=date(cy, cm, 1).strftime("%B %Y"),
+        total_spent=round(total_spent, 2),
+        total_income=round(total_income, 2),
+        net=round(net, 2),
+        account_count=Account.query.count(),
+        bank_month_summary=bank_month_summary,
+        cat_labels=[c for c, _ in cat_sorted],
+        cat_values=[round(v, 2) for _, v in cat_sorted],
+        bank_donut_labels=[b for b, _ in bank_spent_month],
+        bank_donut_values=[v for _, v in bank_spent_month],
+        bank_donut_colors=[BANK_COLORS.get(b, "#95a5a6") for b, _ in bank_spent_month],
+        month_labels=month_labels,
+        monthly_by_bank=monthly_by_bank,
+        top_merchants=top_merchants,
+        recent=recent,
+    )
+
+
+@app.route("/spending")
+def spending():
+    from collections import defaultdict
+    from models import Account
+    rows = (
+        db.session.query(Transaction, Account)
+        .join(Account, Transaction.account_id == Account.id)
+        .filter(Transaction.amount < 0)
+        .order_by(Transaction.booking_date.desc())
+        .all()
+    )
+    all_banks = sorted(set(a.bank for _, a in rows))
+
+    totals     = defaultdict(float)
+    by_category = defaultdict(list)
+    cat_by_bank = defaultdict(lambda: defaultdict(float))
+
+    for txn, acc in rows:
+        totals[txn.category] += float(txn.amount)
+        by_category[txn.category].append((txn, acc))
+        cat_by_bank[txn.category][acc.bank] += abs(float(txn.amount))
+
+    sorted_totals = sorted(totals.items(), key=lambda x: x[1])
+    categories = [c for c, _ in sorted_totals]
+
+    # Grouped bar datasets: one per bank
+    grouped_datasets = [{
+        "label": b.capitalize(),
+        "data": [round(cat_by_bank[c].get(b, 0), 2) for c in categories],
+        "backgroundColor": BANK_COLORS.get(b, "#95a5a6") + "cc",
+        "borderColor": BANK_COLORS.get(b, "#95a5a6"),
+        "borderWidth": 1,
+        "borderRadius": 3,
+    } for b in all_banks]
+
+    # Per-category bank breakdown for table
+    cat_bank_rows = {
+        c: [(b, round(cat_by_bank[c].get(b, 0), 2)) for b in all_banks]
+        for c in categories
+    }
+
+    bank_totals = {
+        b: round(sum(cat_by_bank[c].get(b, 0) for c in categories), 2)
+        for b in all_banks
+    }
+    grand_total = round(sum(bank_totals.values()), 2)
+    txn_count = sum(len(v) for v in by_category.values())
+    return render_template("spending.html",
+        totals=sorted_totals,
+        by_category=by_category,
+        all_banks=all_banks,
+        categories=categories,
+        grouped_datasets=grouped_datasets,
+        cat_bank_rows=cat_bank_rows,
+        bank_totals=bank_totals,
+        grand_total=grand_total,
+        bank_colors=BANK_COLORS,
+        txn_count=txn_count,
+    )
 
 
 # ── UniCredit (mTLS + consent SCA) ───────────────────────────────────────────
@@ -165,6 +423,7 @@ def accounts():
                 return redirect(url_for("index"))
             account_list = psd2_client.get_accounts(
                 app.config["SANDBOX_BASE_URL"], session["consent_id"])
+        db_utils.upsert_accounts(bank, account_list)
         return render_template("accounts.html", accounts=account_list, bank=bank)
     except (psd2_client.PSD2ApiError, commerzbank_client.CommerzbankApiError, nordea_client.NordeaApiError) as e:
         flash(str(e), "error")
@@ -207,6 +466,7 @@ def transactions(account_id):
         else:
             txn_data = psd2_client.get_transactions(
                 app.config["SANDBOX_BASE_URL"], session["consent_id"], account_id)
+        db_utils.upsert_transactions(bank, account_id, txn_data)
         return render_template("transactions.html", transactions=txn_data, account_id=account_id, bank=bank)
     except (psd2_client.PSD2ApiError, commerzbank_client.CommerzbankApiError, nordea_client.NordeaApiError) as e:
         flash(str(e), "error")

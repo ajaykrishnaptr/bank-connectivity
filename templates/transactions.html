@@ -1,38 +1,37 @@
 {% extends "base.html" %}
 {% block content %}
-<h2>Transactions</h2>
-<p><a href="{{ url_for('accounts') }}">← Back to Accounts</a></p>
+<div class="page-header">
+  <h2>Transactions</h2>
+  <p><a href="{{ url_for('accounts') }}">← Back to Accounts</a></p>
+</div>
 
 {% macro txn_table(txns, label) %}
-<h3>{{ label }}</h3>
-{% if txns %}
-<table>
-  <thead>
-    <tr>
-      <th>Date</th>
-      <th>Amount</th>
-      <th>Currency</th>
-      <th>Creditor / Debtor</th>
-      <th>Remittance Info</th>
-    </tr>
-  </thead>
-  <tbody>
-    {% for t in txns %}
-    <tr>
-      <td>{{ t.get("bookingDate", t.get("valueDate", "—")) }}</td>
-      <td>{{ t.get("transactionAmount", {}).get("amount", "—") }}</td>
-      <td>{{ t.get("transactionAmount", {}).get("currency", "—") }}</td>
-      <td>
-        {{ t.get("creditorName", t.get("debtorName", "—")) }}
-      </td>
-      <td>{{ t.get("remittanceInformationUnstructured", "—") }}</td>
-    </tr>
-    {% endfor %}
-  </tbody>
-</table>
-{% else %}
-<p>No {{ label | lower }} transactions.</p>
-{% endif %}
+<div class="card mb-1">
+  <div class="card-section-title">{{ label }}</div>
+  {% if txns %}
+  <table>
+    <thead>
+      <tr><th>Date</th><th class="text-right">Amount</th><th>Currency</th><th>Counterparty</th><th>Remittance Info</th></tr>
+    </thead>
+    <tbody>
+      {% for t in txns %}
+      {% set amt = t.get("transactionAmount", {}).get("amount", "") %}
+      <tr>
+        <td class="mono text-muted">{{ t.get("bookingDate", t.get("valueDate", "—")) }}</td>
+        <td class="text-right fw-600 {% if amt and amt | float >= 0 %}text-green{% else %}text-red{% endif %}">
+          {{ amt or "—" }}
+        </td>
+        <td>{{ t.get("transactionAmount", {}).get("currency", "—") }}</td>
+        <td>{{ t.get("creditorName", t.get("debtorName", "—")) }}</td>
+        <td class="text-muted">{{ t.get("remittanceInformationUnstructured", "—") }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <p class="text-muted">No {{ label | lower }} transactions.</p>
+  {% endif %}
+</div>
 {% endmacro %}
 
 {{ txn_table(transactions.booked, "Booked") }}
