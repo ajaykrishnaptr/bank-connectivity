@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>OpenBanking AIS</title>
+  <title>Bank Connectivity</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
@@ -255,13 +255,14 @@
   <div class="topnav-inner">
     <a class="nav-logo" href="{{ url_for('index') }}">
       <div class="nav-logo-icon">◆</div>
-      OpenBanking AIS
+      Bank Connectivity
     </a>
     <div class="nav-divider"></div>
     <div class="nav-links">
       <a href="{{ url_for('dashboard') }}" {% if request.endpoint == 'dashboard' %}class="active"{% endif %}>Dashboard</a>
       <a href="{{ url_for('aggregation') }}" {% if request.endpoint == 'aggregation' %}class="active"{% endif %}>Balances</a>
       <a href="{{ url_for('spending') }}" {% if request.endpoint == 'spending' %}class="active"{% endif %}>Spending</a>
+      <a href="{{ url_for('recurring') }}" {% if request.endpoint == 'recurring' %}class="active"{% endif %}>Recurring</a>
       <a href="{{ url_for('index') }}" {% if request.endpoint == 'index' %}class="active"{% endif %}>Connect</a>
     </div>
     <div class="nav-spacer"></div>
