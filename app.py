@@ -1,8 +1,7 @@
 import os
-from functools import wraps
 
 from dotenv import load_dotenv
-from flask import Flask, abort, flash, redirect, render_template, request, session, url_for
+from flask import Flask, flash, redirect, render_template, request, session, url_for
 from flask_login import LoginManager, current_user, login_required, login_user, logout_user
 from werkzeug.security import check_password_hash, generate_password_hash
 
@@ -48,18 +47,17 @@ def _mom_delta(current: float, prev: float):
     return pct, "up" if pct > 0 else "down"
 
 
-def _detect_recurring(acct_filter=None):
+def _detect_recurring():
     from collections import defaultdict
     from datetime import date
 
-    q = (
+    all_txns = (
         db.session.query(Transaction, Account)
         .join(Account, Transaction.account_id == Account.id)
-        .filter(Transaction.status == "booked")
+        .filter(Transaction.status == "booked",
+                Account.user_id == current_user.id)
+        .all()
     )
-    if acct_filter is not None:
-        q = q.filter(acct_filter)
-    all_txns = q.all()
 
     def _process(sign):
         by_merchant = defaultdict(list)
@@ -139,29 +137,16 @@ with app.app_context():
         db.session.commit()
 
 
-def tpp_required(f):
-    @wraps(f)
-    def decorated(*args, **kwargs):
-        if not current_user.is_authenticated or current_user.role != "tpp_admin":
-            abort(403)
-        return f(*args, **kwargs)
-    return decorated
-
-
 def _acct_query():
-    """Account query scoped to current user (unrestricted for tpp_admin)."""
-    q = Account.query
-    if current_user.role != "tpp_admin":
-        q = q.filter(Account.user_id == current_user.id)
-    return q
+    return Account.query.filter(Account.user_id == current_user.id)
 
 
 def _txn_acct_query():
-    """Transaction+Account join scoped to current user (unrestricted for tpp_admin)."""
-    q = db.session.query(Transaction, Account).join(Account, Transaction.account_id == Account.id)
-    if current_user.role != "tpp_admin":
-        q = q.filter(Account.user_id == current_user.id)
-    return q
+    return (
+        db.session.query(Transaction, Account)
+        .join(Account, Transaction.account_id == Account.id)
+        .filter(Account.user_id == current_user.id)
+    )
 
 
 def _get_connection(bank):
@@ -267,16 +252,15 @@ def signup():
         elif User.query.filter_by(email=email).first():
             flash("An account with that email already exists.", "error")
         else:
-            is_first = User.query.count() == 0
             user = User(
                 email=email,
                 password_hash=generate_password_hash(password),
-                role="tpp_admin" if is_first else "user",
+                role="user",
             )
             db.session.add(user)
             db.session.commit()
             login_user(user)
-            flash("You are the TPP admin." if is_first else "Account created.", "success")
+            flash("Account created. Welcome!", "success")
             return redirect(url_for("index"))
     return render_template("signup.html")
 
@@ -507,8 +491,7 @@ def spending():
 @app.route("/recurring")
 @login_required
 def recurring():
-    acct_filter = None if current_user.role == "tpp_admin" else (Account.user_id == current_user.id)
-    expenses, income = _detect_recurring(acct_filter=acct_filter)
+    expenses, income = _detect_recurring()
     fixed    = [r for r in expenses if r["is_fixed"]]
     variable = [r for r in expenses if not r["is_fixed"]]
     return render_template("recurring.html",

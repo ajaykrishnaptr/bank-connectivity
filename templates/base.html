@@ -278,7 +278,6 @@
       {% endif %}
       <div class="nav-bank-badge">
         <span style="max-width:160px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">{{ current_user.email }}</span>
-        {% if current_user.role == "tpp_admin" %}<span style="color:var(--accent);font-weight:600;">· Admin</span>{% endif %}
       </div>
       <a class="nav-disconnect" href="{{ url_for('logout') }}">Logout</a>
     {% endif %}
