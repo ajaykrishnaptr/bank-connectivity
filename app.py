@@ -99,7 +99,163 @@ def _detect_recurring():
             })
         return sorted(results, key=lambda x: (-x["months"], -x["avg_amount"]))
 
-    return _process(-1), _process(+1)
+    return _process(-1), _process(+1), all_txns
+
+
+def _detect_waste(fixed, all_recurring, income, all_txns):
+    from collections import defaultdict
+    from datetime import date, timedelta
+    from statistics import mean
+
+    signals = []
+    today = date.today()
+    cutoff_90 = today - timedelta(days=90)
+
+    # ── Currency helpers (built once, used by all signals) ────────────────────
+    merchant_charges  = defaultdict(list)
+    merchant_currency = defaultdict(lambda: defaultdict(int))
+    for t, a in all_txns:
+        if float(t.amount) < 0 and t.booking_date:
+            key = t.creditor_name or t.debtor_name or ""
+            if key:
+                merchant_charges[key].append((t.booking_date, abs(float(t.amount))))
+                merchant_currency[key][t.currency or a.currency or "EUR"] += 1
+
+    def _currency(merchant):
+        counts = merchant_currency.get(merchant, {})
+        return max(counts, key=counts.get) if counts else "EUR"
+
+    def _fmt(amount, merchant):
+        cur = _currency(merchant)
+        symbol = "€" if cur == "EUR" else cur + " "
+        return f"{symbol}{amount:.2f}"
+
+    # ── 1. Redundant category ─────────────────────────────────────────────────
+    # Deduplicate by merchant name first — same service on two bank accounts is one service
+    REDUNDANCY_CATEGORIES = {"Entertainment", "Health & Fitness"}
+    cat_groups = defaultdict(dict)   # category → {merchant_name: best_r}
+    for r in fixed:
+        if r["category"] in REDUNDANCY_CATEGORIES:
+            name = r["merchant"]
+            existing = cat_groups[r["category"]].get(name)
+            if existing is None or r["avg_amount"] > existing["avg_amount"]:
+                cat_groups[r["category"]][name] = r
+    for cat, by_name in cat_groups.items():
+        items = list(by_name.values())
+        if len(items) >= 2:
+            total = round(sum(i["avg_amount"] for i in items), 2)
+            signals.append({
+                "type": "redundant", "severity": "warning",
+                "category": cat,
+                "services": [{"merchant": i["merchant"], "avg_amount": i["avg_amount"],
+                               "fmt": _fmt(i["avg_amount"], i["merchant"])} for i in items],
+                "total_monthly": total,
+                "total_fmt": _fmt(total, items[0]["merchant"]),
+                "message": f"{len(items)} {cat} subscriptions — {_fmt(total, items[0]['merchant'])}/mo combined",
+            })
+
+    # ── 2. Price creep ────────────────────────────────────────────────────────
+    PRICE_CREEP_CATEGORIES = {"Entertainment", "Utilities", "Health", "Healthcare", "Health & Fitness"}
+    for r in fixed:
+        if r["category"] not in PRICE_CREEP_CATEGORIES:
+            continue
+        charges = sorted(merchant_charges.get(r["merchant"], []), key=lambda x: x[0])
+        if len(charges) < 4:
+            continue
+        early_avg  = mean(amt for _, amt in charges[:2])
+        recent_avg = mean(amt for _, amt in charges[-2:])
+        if early_avg > 0:
+            pct = (recent_avg - early_avg) / early_avg * 100
+            if pct > 5.0:
+                signals.append({
+                    "type": "price_creep", "severity": "warning",
+                    "merchant": r["merchant"],
+                    "early_avg": round(early_avg, 2),
+                    "recent_avg": round(recent_avg, 2),
+                    "early_fmt": _fmt(early_avg, r["merchant"]),
+                    "recent_fmt": _fmt(recent_avg, r["merchant"]),
+                    "pct_increase": round(pct, 1),
+                    "message": f"{r['merchant']} price went up {pct:.0f}% ({_fmt(early_avg, r['merchant'])} → {_fmt(recent_avg, r['merchant'])})",
+                })
+
+    # ── 3. Correlation-based lapse ────────────────────────────────────────────
+    TRANSIT_KWS   = ["bvg", "hvv", "mvv", "vbb", "rnv", "vgn", "transit",
+                     "monatsticket", "deutschlandticket"]
+    RIDESHARE_KWS = ["uber", "taxi", "bolt", "free now", "freenow", "mytaxi"]
+    GYM_KWS       = ["gym", "fitness", "sport", "mcfit", "planet fitness",
+                     "urban sports", "holmes place"]
+    INSURANCE_KWS = ["krankenkasse", "insurance", "versicherung", "tk ", "aok", "barmer"]
+
+    transit_subs = [r for r in all_recurring
+                    if any(kw in r["merchant"].lower() for kw in TRANSIT_KWS)
+                    and r["months"] >= 3]
+    if transit_subs:
+        rideshare_txns = [(t, a) for t, a in all_txns
+                         if t.booking_date and t.booking_date >= cutoff_90
+                         and float(t.amount) < 0
+                         and any(kw in (t.creditor_name or t.debtor_name or "").lower()
+                                 for kw in RIDESHARE_KWS)]
+        if len(rideshare_txns) >= 3:
+            rideshare_total = round(sum(abs(float(t.amount)) for t, _ in rideshare_txns), 2)
+            sub = transit_subs[0]
+            signals.append({
+                "type": "lapse", "severity": "info",
+                "merchant": sub["merchant"],
+                "reason": "transit_rideshare_overlap",
+                "subscription_monthly": sub["avg_amount"],
+                "conflicting_count": len(rideshare_txns),
+                "conflicting_amount": rideshare_total,
+                "window_days": 90,
+                "message": (f"{sub['merchant']} monthly pass + {len(rideshare_txns)} rideshare"
+                            f" rides in 90 days (€{rideshare_total}) — are you using transit?"),
+            })
+
+    gym_subs = [r for r in fixed
+                if r["category"] == "Health & Fitness"
+                or any(kw in r["merchant"].lower() for kw in GYM_KWS)]
+    if gym_subs:
+        health_recent = [t for t, a in all_txns
+                         if t.booking_date and t.booking_date >= cutoff_90
+                         and float(t.amount) < 0
+                         and t.category in ("Health & Fitness", "Healthcare")
+                         and not any(kw in (t.creditor_name or t.debtor_name or "").lower()
+                                     for kw in INSURANCE_KWS)]
+        if len(health_recent) == 0:
+            sub = gym_subs[0]
+            signals.append({
+                "type": "lapse", "severity": "info",
+                "merchant": sub["merchant"],
+                "reason": "gym_no_adjacent_spend",
+                "subscription_monthly": sub["avg_amount"],
+                "window_days": 90,
+                "message": f"{sub['merchant']} is active but no health/fitness purchases in 90 days",
+            })
+
+    # ── 4. Subscription burden ────────────────────────────────────────────────
+    monthly_fixed_total = round(sum(r["avg_amount"] for r in fixed), 2)
+    monthly_income_avg  = round(sum(r["avg_amount"] for r in income), 2)
+    if monthly_income_avg > 0:
+        pct = round(monthly_fixed_total / monthly_income_avg * 100, 1)
+        # Determine dominant currency from income transactions
+        income_cur_counts: dict = defaultdict(int)
+        for t, a in all_txns:
+            if float(t.amount) > 0:
+                income_cur_counts[t.currency or a.currency or "EUR"] += 1
+        inc_cur = max(income_cur_counts, key=income_cur_counts.get) if income_cur_counts else "EUR"
+        inc_sym = "€" if inc_cur == "EUR" else inc_cur + " "
+        signals.append({
+            "type": "burden",
+            "severity": "warning" if pct > 20 else "info",
+            "monthly_fixed": monthly_fixed_total,
+            "monthly_income": monthly_income_avg,
+            "monthly_fixed_fmt": f"{inc_sym}{monthly_fixed_total:.2f}",
+            "monthly_income_fmt": f"{inc_sym}{monthly_income_avg:.2f}",
+            "pct": pct,
+            "flagged": pct > 20,
+            "message": f"Fixed subscriptions are {pct}% of your monthly income",
+        })
+
+    return signals
 
 
 app = Flask(__name__)
@@ -526,11 +682,12 @@ def spending():
 @app.route("/recurring")
 @login_required
 def recurring():
-    expenses, income = _detect_recurring()
+    expenses, income, all_txns = _detect_recurring()
     fixed    = [r for r in expenses if r["is_fixed"]]
     variable = [r for r in expenses if not r["is_fixed"]]
+    waste    = _detect_waste(fixed, expenses, income, all_txns)
     return render_template("recurring.html",
-        fixed=fixed, variable=variable, income=income,
+        fixed=fixed, variable=variable, income=income, waste=waste,
         monthly_fixed=round(sum(r["avg_amount"] for r in fixed), 2),
         monthly_all=round(sum(r["avg_amount"] for r in expenses), 2),
         monthly_income=round(sum(r["avg_amount"] for r in income), 2),

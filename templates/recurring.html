@@ -5,6 +5,80 @@
   <p>Merchants appearing in 2+ distinct months — detected across all banks</p>
 </div>
 
+<!-- ── Worth Reviewing ── -->
+{% if waste %}
+<div class="card mb-15" style="border-top:3px solid #f59e0b">
+  <div style="display:flex;align-items:center;gap:.75rem;margin-bottom:1rem">
+    <div class="card-section-title" style="margin-bottom:0;color:#d97706">Worth Reviewing</div>
+    <div style="font-size:.75rem;color:var(--text-3);font-weight:400">detected from your spending patterns</div>
+  </div>
+  <div style="display:flex;flex-direction:column;gap:.625rem">
+    {% for s in waste %}
+    <div style="display:flex;align-items:flex-start;gap:.875rem;padding:1rem 1.125rem;
+      border-radius:var(--radius-sm);border:1px solid;
+      {% if s.severity == 'warning' %}background:#fffbeb;border-color:#fde68a{% else %}background:#f0f9ff;border-color:#bae6fd{% endif %}">
+
+      <!-- icon -->
+      <div style="font-size:1.25rem;flex-shrink:0;line-height:1;margin-top:.1rem">
+        {% if s.type == 'redundant' %}⚠️
+        {% elif s.type == 'price_creep' %}📈
+        {% elif s.type == 'lapse' %}💤
+        {% else %}💸
+        {% endif %}
+      </div>
+
+      <!-- content -->
+      <div style="flex:1;min-width:0">
+        <div style="font-size:.875rem;font-weight:700;
+          {% if s.severity == 'warning' %}color:#92400e{% else %}color:#0c4a6e{% endif %};
+          margin-bottom:.35rem">
+          {{ s.message }}
+        </div>
+
+        {% if s.type == 'redundant' %}
+          <div style="display:flex;flex-wrap:wrap;gap:.375rem;margin-top:.25rem">
+            {% for svc in s.services %}
+            <span class="pill" style="background:#fff7ed;color:#c2410c;border:1px solid #fed7aa">
+              {{ svc.merchant }} &mdash; {{ svc.fmt }}/mo
+            </span>
+            {% endfor %}
+          </div>
+
+        {% elif s.type == 'price_creep' %}
+          <div style="font-size:.78rem;color:var(--text-2);margin-top:.2rem">
+            You were paying {{ s.early_fmt }} &rarr; now {{ s.recent_fmt }}
+            &nbsp;<span class="pill" style="background:#fef2f2;color:#991b1b;border:1px solid #fecaca">+{{ s.pct_increase }}%</span>
+          </div>
+
+        {% elif s.type == 'lapse' and s.reason == 'transit_rideshare_overlap' %}
+          <div style="font-size:.78rem;color:var(--text-2);margin-top:.2rem">
+            {{ s.conflicting_count }} rideshare trips in the last {{ s.window_days }} days &bull; €{{ "%.2f"|format(s.conflicting_amount) }} spent on taxis/rideshares
+          </div>
+
+        {% elif s.type == 'lapse' and s.reason == 'gym_no_adjacent_spend' %}
+          <div style="font-size:.78rem;color:var(--text-2);margin-top:.2rem">
+            No gym, sport, or health purchases detected in the last {{ s.window_days }} days
+          </div>
+
+        {% elif s.type == 'burden' %}
+          <div style="margin-top:.5rem;max-width:300px">
+            <div class="progress-track">
+              <div class="progress-fill" style="width:{{ [s.pct, 100]|min }}%;
+                background:{% if s.flagged %}var(--red){% else %}#f59e0b{% endif %}"></div>
+            </div>
+            <div style="font-size:.7rem;color:var(--text-3);margin-top:.3rem">
+              {{ s.monthly_fixed_fmt }}/mo in fixed charges &bull; {{ s.monthly_income_fmt }}/mo income detected
+            </div>
+          </div>
+        {% endif %}
+
+      </div>
+    </div>
+    {% endfor %}
+  </div>
+</div>
+{% endif %}
+
 <!-- ── Summary cards ── -->
 <div class="grid grid-3 mb-15">
   <div class="card" style="border-top:3px solid var(--red)">
