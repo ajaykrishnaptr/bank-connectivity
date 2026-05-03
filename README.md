@@ -33,13 +33,23 @@ Connect European bank accounts in one place. FintNet fetches accounts, balances,
 
 ## Banks integrated
 
-| Bank | Country | Status |
-|------|---------|--------|
-| Nordea | Finland, Sweden, Norway, Denmark | Ready |
-| Commerzbank | Germany | Ready — no redirect needed |
-| UniCredit | Italy | Requires sandbox onboarding |
-| Deutsche Bank | Germany | Requires sandbox onboarding at developer.db.com |
-| ING | Netherlands, Belgium, Germany | Requires sandbox onboarding at developer.ing.com |
+| Bank | Country | Auth | Status |
+|------|---------|------|--------|
+| Nordea | Finland, Sweden, Norway, Denmark | OAuth2 authorization_code + SCA | Ready |
+| Commerzbank | Germany | OAuth2 client_credentials + consent | Ready — no redirect needed |
+| UniCredit | Italy | mTLS + PSD2 consent SCA | Requires sandbox onboarding |
+| Deutsche Bank | Germany | OAuth2 + Berlin Group consent + SCA redirect | Client built, awaiting credentials |
+| ING | Netherlands, Belgium, Germany | mTLS + HTTP Signatures + OAuth2 authorization_code | Working with sandbox example client |
+
+### ING flow specifics
+
+ING is the most complex integration:
+- Two **separate key pairs** required: TLS for mTLS, signing for HTTP Request Signatures
+- Two **different keyId formats** depending on endpoint:
+  - App token (`client_credentials`): `keyId="SN=<cert-serial-hex>"`, signature in `Authorization` header, requires `TPP-Signature-Certificate` header
+  - All Bearer-token calls (code exchange, AIS): `keyId="<client_id>"`, signature in `Signature` header, no TPP cert
+- Sandbox example client uses pre-registered redirect URI `https://www.example.com/`. After authorization the user lands there with `?code=...` in the URL bar — paste it at `/ing/enter-code` to complete connection.
+- Per-account grants vary by sandbox test profile — `_fetch_and_store` catches `INGApiError` 403s and skips accounts without grant, so the connection still saves.
 
 ---
 
@@ -69,11 +79,11 @@ All accounts use password: **`TestPass123`**
 
 | Name | Email | Banks | Currency |
 |------|-------|-------|----------|
-| Priya Sharma | `priya.sharma@testbank.eu` | Nordea FI + Commerzbank DE | EUR |
+| Priya Sharma | `priya.sharma@testbank.eu` | Nordea FI + Commerzbank DE + ING NL | EUR |
 | Arjun Mehta | `arjun.mehta@testbank.eu` | Nordea SE | SEK |
 | Kavya Reddy | `kavya.reddy@testbank.eu` | Commerzbank DE | EUR |
 
-**Priya Sharma** — 4 accounts (2 Nordea Finland, 2 Commerzbank Germany), salary from Siemens AG ~€4,200/mo. Good demo for multi-bank, single-currency.
+**Priya Sharma** — 6 accounts across three banks (2 Nordea Finland, 2 Commerzbank Germany, 2 ING Netherlands), salary from Siemens AG ~€4,200/mo. Best demo for multi-bank, multi-country aggregation.
 
 **Arjun Mehta** — 2 Swedish Nordea accounts (`Lönekonto` + `Sparkonto`) in SEK, salary from SAP SE ~38,000–44,000 SEK/mo. Best demo for cross-border currency conversion.
 
@@ -94,24 +104,16 @@ Each current account includes:
 FintNet is a licensed-ready TPP. The goal is to expand direct PSD2 integrations bank by bank — no third-party aggregator, full data ownership, no per-connection fees.
 
 **Pending setup**
-- [ ] ING sandbox credentials — certs already in `certs/`. Set `ING_CLIENT_ID` (from developer.ing.com app dashboard), then add to `.envrc`:
-  - `ING_CLIENT_ID`
-  - `ING_SIGNING_KEY_PATH` (default `certs/ing_signing.key` ✓)
-  - `ING_TLS_CERT_PATH` (default `certs/ing_tls.cer` ✓)
-  - `ING_TLS_KEY_PATH` (default `certs/ing_tls.key` ✓)
-  - `ING_COUNTRY_CODE` (default `NL`; set to `DE` or `BE` for other markets)
-  - `ING_REDIRECT_URI` (default `http://localhost:5000/ing/callback`)
-- [ ] Deutsche Bank sandbox credentials — register at [developer.db.com](https://developer.db.com), then add to `.envrc`:
+- [ ] Deutsche Bank sandbox credentials — register at [developer.db.com](https://developer.db.com), then add to `.env`:
   - `DB_CLIENT_ID`, `DB_CLIENT_SECRET`
   - `DB_SANDBOX_PSU_ID` (from Dashboard → My Test Users)
   - `DB_BASE_URL`, `DB_TOKEN_URL` (from your app's API docs page after registration)
 
 **Next banks to integrate**
-- Deutsche Bank (Germany) — client built, awaiting sandbox credentials (see Pending setup above)
-- ING (Netherlands/Belgium) — strong developer portal, OAuth2 + consent
 - Santander (Spain/Portugal) — Berlin Group, good sandbox
 - BNP Paribas (France) — Berlin Group, large retail footprint
 - HSBC (UK/Europe) — post-Brexit but active PSD2 API
+- BBVA (Spain) — Berlin Group, strong open API ecosystem
 
 **Infrastructure needed to scale**
 - Bank registry — config-driven bank catalogue (name, country, spec, base URL, auth method) so adding a new bank doesn't require a new client file
