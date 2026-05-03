@@ -108,6 +108,78 @@ Category:"""
     return "Transfers / Other"
 
 
+def categorize_with_confidence(merchant: str) -> dict:
+    """Ask the LLM for category, confidence, and reasoning as JSON.
+
+    Returns a dict like:
+        {"category": "Utilities", "confidence": "high", "reasoning": "..."}
+
+    On parse failure, falls back to rules with confidence='low'.
+    """
+    import json
+    import ollama
+
+    prompt = f"""You are a transaction categorization assistant.
+
+Given a merchant name, output a JSON object with three fields:
+- category: exactly ONE category from this list:
+  {", ".join(CATEGORIES)}
+- confidence: one of "high", "medium", "low"
+- reasoning: a one-sentence explanation (max 15 words)
+
+Output ONLY the JSON, no other text. No markdown fences.
+
+Examples:
+Merchant: Tata Power
+Output: {{"category": "Utilities", "confidence": "high", "reasoning": "Tata Power is an Indian electricity provider"}}
+
+Merchant: Lieferando
+Output: {{"category": "Food Delivery", "confidence": "high", "reasoning": "Lieferando is a German food delivery service"}}
+
+Merchant: random unknown name
+Output: {{"category": "Transfers / Other", "confidence": "low", "reasoning": "Unrecognised merchant, no clear category"}}
+
+Now categorize this:
+Merchant: {merchant}
+Output:"""
+
+    response = ollama.chat(
+        model="qwen2.5:3b",
+        messages=[{"role": "user", "content": prompt}],
+        options={"temperature": 0},
+    )
+    raw = response["message"]["content"].strip()
+
+    # Strip markdown fences if the model wrapped its output: ```json ... ```
+    if raw.startswith("```"):
+        lines = raw.split("\n")
+        raw = "\n".join(lines[1:-1] if lines[-1].startswith("```") else lines[1:])
+    # Also: model sometimes adds a trailing comment after the JSON; isolate the {...} block
+    if "{" in raw and "}" in raw:
+        raw = raw[raw.index("{"): raw.rindex("}") + 1]
+
+    try:
+        parsed = json.loads(raw)
+        cat = parsed.get("category", "Transfers / Other")
+        # Sanity-check: did the model invent a category outside our list?
+        if cat not in CATEGORIES:
+            cat = "Transfers / Other"
+        return {
+            "category":   cat,
+            "confidence": parsed.get("confidence", "low"),
+            "reasoning":  parsed.get("reasoning", "")[:200],
+        }
+    except (json.JSONDecodeError, AttributeError):
+        log.warning("categorize.json.parse_failed", extra={
+            "event": "categorize.json.parse_failed", "merchant": merchant, "raw": raw[:200],
+        })
+        return {
+            "category":   _categorize_by_rules(merchant),
+            "confidence": "low",
+            "reasoning":  "JSON parse failed; fell back to rules",
+        }
+
+
 def categorize(merchant: str) -> str:
     """Public API. Routes to AI or rules depending on env var; AI mode is cached in DB."""
     if not merchant:
