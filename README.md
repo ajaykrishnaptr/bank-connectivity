@@ -38,6 +38,8 @@ Connect European bank accounts in one place. FintNet fetches accounts, balances,
 | Nordea | Finland, Sweden, Norway, Denmark | Ready |
 | Commerzbank | Germany | Ready — no redirect needed |
 | UniCredit | Italy | Requires sandbox onboarding |
+| Deutsche Bank | Germany | Requires sandbox onboarding at developer.db.com |
+| ING | Netherlands, Belgium, Germany | Requires sandbox onboarding at developer.ing.com |
 
 ---
 
@@ -85,11 +87,40 @@ Each current account includes:
 
 ---
 
-## What's next
+## Roadmap
 
-- Expat view — side-by-side comparison of accounts across two countries for users who live cross-border
-- Subscription intelligence — detect unused subscriptions and alert the user
-- Tax category tagging — flag deductible expenses per country for freelancers
-- TPP admin panel (`role` column already in DB)
+### Growing the TPP (becoming the aggregator)
+
+FintNet is a licensed-ready TPP. The goal is to expand direct PSD2 integrations bank by bank — no third-party aggregator, full data ownership, no per-connection fees.
+
+**Pending setup**
+- [ ] ING sandbox credentials — certs already in `certs/`. Set `ING_CLIENT_ID` (from developer.ing.com app dashboard), then add to `.envrc`:
+  - `ING_CLIENT_ID`
+  - `ING_SIGNING_KEY_PATH` (default `certs/ing_signing.key` ✓)
+  - `ING_TLS_CERT_PATH` (default `certs/ing_tls.cer` ✓)
+  - `ING_TLS_KEY_PATH` (default `certs/ing_tls.key` ✓)
+  - `ING_COUNTRY_CODE` (default `NL`; set to `DE` or `BE` for other markets)
+  - `ING_REDIRECT_URI` (default `http://localhost:5000/ing/callback`)
+- [ ] Deutsche Bank sandbox credentials — register at [developer.db.com](https://developer.db.com), then add to `.envrc`:
+  - `DB_CLIENT_ID`, `DB_CLIENT_SECRET`
+  - `DB_SANDBOX_PSU_ID` (from Dashboard → My Test Users)
+  - `DB_BASE_URL`, `DB_TOKEN_URL` (from your app's API docs page after registration)
+
+**Next banks to integrate**
+- Deutsche Bank (Germany) — client built, awaiting sandbox credentials (see Pending setup above)
+- ING (Netherlands/Belgium) — strong developer portal, OAuth2 + consent
+- Santander (Spain/Portugal) — Berlin Group, good sandbox
+- BNP Paribas (France) — Berlin Group, large retail footprint
+- HSBC (UK/Europe) — post-Brexit but active PSD2 API
+
+**Infrastructure needed to scale**
+- Bank registry — config-driven bank catalogue (name, country, spec, base URL, auth method) so adding a new bank doesn't require a new client file
+- Unified PSD2 adapter — single client that handles Berlin Group NextGenPSD2 spec (covers ~80% of EU banks); keep bespoke clients only for non-standard banks (Nordea, UniCredit)
 - Token refresh / expiry handling — mark connection as `expired`, show Reconnect button
 - Background data sync — periodic re-fetch of transactions per active connection
+- Consent renewal — auto-prompt users before 90-day consent windows expire
+
+**Platform features**
+- TPP admin panel — manage users, connections, consent status (`role` column already in DB)
+- Expat view — side-by-side accounts across two countries for cross-border users
+- Tax category tagging — flag deductible expenses per country for freelancers

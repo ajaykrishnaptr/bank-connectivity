@@ -158,10 +158,19 @@
       </div>
       {% endif %}
     </div>
-    <a href="{{ url_for('recurring') }}" style="font-size:.75rem;font-weight:600;
-      color:var(--accent);white-space:nowrap;flex-shrink:0;text-decoration:none;margin-top:.15rem">
-      Review →
-    </a>
+    <div style="display:flex;flex-direction:column;align-items:flex-end;gap:.5rem;flex-shrink:0">
+      <a href="{{ url_for('recurring') }}" style="font-size:.75rem;font-weight:600;
+        color:var(--accent);white-space:nowrap;text-decoration:none">
+        Review →
+      </a>
+      {% if s.key %}
+      <form method="post" action="{{ url_for('dismiss_alert') }}" style="margin:0">
+        <input type="hidden" name="key" value="{{ s.key }}">
+        <button type="submit" title="Dismiss" style="background:none;border:none;cursor:pointer;
+          font-size:.75rem;color:var(--text-3);padding:0;line-height:1">✕</button>
+      </form>
+      {% endif %}
+    </div>
   </div>
   {% endfor %}
 </div>
@@ -190,7 +199,7 @@
     Supported Banks
   </div>
   <div style="flex:1;height:1px;background:var(--border)"></div>
-  <div style="font-size:.75rem;color:var(--text-3)">Connect one or all three</div>
+  <div style="font-size:.75rem;color:var(--text-3)">Connect one or all five</div>
 </div>
 
 <!-- ── Bank cards ────────────────────────────────────────────────────────── -->
@@ -206,6 +215,12 @@
   ('nordea',      'Nordea',      '#3498db', 'Finland · Sweden · Norway · Denmark',
    'Connect your Nordea account from anywhere in Scandinavia and track everything in one dashboard.',
    url_for('nordea_connect')),
+  ('deutschebank', 'Deutsche Bank', '#0018a8', 'Germany',
+   'Connect your Deutsche Bank account via PSD2 and get a complete view of your balances and transactions.',
+   url_for('deutschebank_connect')),
+  ('ing', 'ING', '#FF6200', 'Netherlands · Belgium · Germany',
+   'Connect your ING account and see all your balances and transactions in one unified dashboard.',
+   url_for('ing_connect')),
 ] %}
 
 {% set conn = connections.get(bank_id) %}

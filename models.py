@@ -62,6 +62,19 @@ class Transaction(db.Model):
     account = db.relationship("Account", back_populates="transactions")
 
 
+class DismissedAlert(db.Model):
+    __tablename__ = "dismissed_alerts"
+
+    id           = db.Column(db.Integer, primary_key=True)
+    user_id      = db.Column(db.Integer, db.ForeignKey("users.id"), nullable=False)
+    alert_key    = db.Column(db.String(255), nullable=False)
+    dismissed_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
+
+    __table_args__ = (
+        db.UniqueConstraint("user_id", "alert_key", name="uq_dismissed_user_alert"),
+    )
+
+
 class BankConnection(db.Model):
     __tablename__ = "bank_connections"
 

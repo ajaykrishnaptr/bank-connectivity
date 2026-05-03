@@ -12,9 +12,11 @@ import categorize as cat
 import commerzbank_client
 import currency_utils
 import db_utils
+import deutschebank_client
+import ing_client
 import nordea_client
 import psd2_client
-from models import Account, BankConnection, Transaction, User, db
+from models import Account, BankConnection, DismissedAlert, Transaction, User, db
 
 BANK_COLORS = {
     "commerzbank": "#e67e22",
@@ -144,8 +146,10 @@ def _detect_waste(fixed, all_recurring, income, all_txns):
         items = list(by_name.values())
         if len(items) >= 2:
             total = round(sum(i["avg_amount"] for i in items), 2)
+            sorted_names = sorted(i["merchant"] for i in items)
             signals.append({
                 "type": "redundant", "severity": "warning",
+                "key": f"redundant:{cat}:{','.join(sorted_names)}",
                 "category": cat,
                 "services": [{"merchant": i["merchant"], "avg_amount": i["avg_amount"],
                                "fmt": _fmt(i["avg_amount"], i["merchant"])} for i in items],
@@ -169,6 +173,7 @@ def _detect_waste(fixed, all_recurring, income, all_txns):
             if pct > 5.0:
                 signals.append({
                     "type": "price_creep", "severity": "warning",
+                    "key": f"price_creep:{r['merchant']}",
                     "merchant": r["merchant"],
                     "early_avg": round(early_avg, 2),
                     "recent_avg": round(recent_avg, 2),
@@ -200,6 +205,7 @@ def _detect_waste(fixed, all_recurring, income, all_txns):
             sub = transit_subs[0]
             signals.append({
                 "type": "lapse", "severity": "info",
+                "key": f"lapse:{sub['merchant']}:transit",
                 "merchant": sub["merchant"],
                 "reason": "transit_rideshare_overlap",
                 "subscription_monthly": sub["avg_amount"],
@@ -223,6 +229,7 @@ def _detect_waste(fixed, all_recurring, income, all_txns):
             sub = gym_subs[0]
             signals.append({
                 "type": "lapse", "severity": "info",
+                "key": f"lapse:{sub['merchant']}:gym",
                 "merchant": sub["merchant"],
                 "reason": "gym_no_adjacent_spend",
                 "subscription_monthly": sub["avg_amount"],
@@ -266,6 +273,8 @@ app.config["SANDBOX_BASE_URL"] = os.getenv("SANDBOX_BASE_URL", "https://develope
 app.config["REDIRECT_URI"] = os.getenv("REDIRECT_URI", "http://localhost:5000/callback")
 app.config["CB_REDIRECT_URI"] = os.getenv("CB_REDIRECT_URI", "http://localhost:5000/commerzbank/callback")
 app.config["NORDEA_REDIRECT_URI"] = os.getenv("NORDEA_REDIRECT_URI", "http://localhost:5000/nordea/callback")
+app.config["DB_REDIRECT_URI"]     = os.getenv("DB_REDIRECT_URI",     "http://localhost:5000/deutschebank/callback")
+app.config["ING_REDIRECT_URI"]    = os.getenv("ING_REDIRECT_URI",    "http://localhost:5000/ing/callback")
 app.config["SQLALCHEMY_DATABASE_URI"] = os.getenv("DATABASE_URL", "sqlite:///ais.db")
 app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
 
@@ -340,6 +349,11 @@ def _fetch_and_store(bank, conn):
     elif bank == "commerzbank":
         token = commerzbank_client.get_oauth_token()
         account_list = commerzbank_client.get_accounts(token, conn.consent_id)
+    elif bank == "deutschebank":
+        token = deutschebank_client.get_oauth_token()
+        account_list = deutschebank_client.get_accounts(token, conn.consent_id)
+    elif bank == "ing":
+        account_list = ing_client.get_accounts(conn.access_token)
     else:  # unicredit
         account_list = psd2_client.get_accounts(app.config["SANDBOX_BASE_URL"], conn.consent_id)
 
@@ -351,6 +365,11 @@ def _fetch_and_store(bank, conn):
         elif bank == "commerzbank":
             token = commerzbank_client.get_oauth_token()
             txn_data = commerzbank_client.get_transactions(token, conn.consent_id, acc.resource_id)
+        elif bank == "deutschebank":
+            token = deutschebank_client.get_oauth_token()
+            txn_data = deutschebank_client.get_transactions(token, conn.consent_id, acc.resource_id)
+        elif bank == "ing":
+            txn_data = ing_client.get_transactions(conn.access_token, acc.resource_id)
         else:
             txn_data = psd2_client.get_transactions(
                 app.config["SANDBOX_BASE_URL"], conn.consent_id, acc.resource_id)
@@ -371,7 +390,12 @@ def index():
     if active_conns > 0 and txn_count > 0:
         expenses, income, all_txns = _detect_recurring()
         fixed = [r for r in expenses if r["is_fixed"]]
-        waste = _detect_waste(fixed, expenses, income, all_txns)
+        all_signals = _detect_waste(fixed, expenses, income, all_txns)
+        dismissed = {
+            d.alert_key for d in
+            DismissedAlert.query.filter_by(user_id=current_user.id).all()
+        }
+        waste = [s for s in all_signals if s.get("key") not in dismissed]
     return render_template("index.html",
         connections=connections,
         active_conns=active_conns,
@@ -379,6 +403,19 @@ def index():
         txn_count=txn_count,
         waste=waste,
     )
+
+
+@app.route("/dismiss-alert", methods=["POST"])
+@login_required
+def dismiss_alert():
+    key = request.form.get("key", "").strip()
+    if key:
+        exists = DismissedAlert.query.filter_by(
+            user_id=current_user.id, alert_key=key).first()
+        if not exists:
+            db.session.add(DismissedAlert(user_id=current_user.id, alert_key=key))
+            db.session.commit()
+    return redirect(url_for("index"))
 
 
 @app.route("/disconnect/<bank>")
@@ -811,6 +848,84 @@ def nordea_callback():
         flash("Nordea connected. Accounts fetched.", "success")
         return redirect(url_for("dashboard"))
     except nordea_client.NordeaApiError as e:
+        flash(str(e), "error")
+        return redirect(url_for("index"))
+
+
+# ── Deutsche Bank (Berlin Group NextGenPSD2, OAuth2 + SCA redirect) ──────────
+
+@app.route("/deutschebank/connect")
+@login_required
+def deutschebank_connect():
+    try:
+        token       = deutschebank_client.get_oauth_token()
+        redirect_uri = app.config["DB_REDIRECT_URI"]
+        consent     = deutschebank_client.create_consent(token, redirect_uri)
+        consent_id  = consent.get("consentId")
+        sca_url     = consent.get("_links", {}).get("scaRedirect", {}).get("href")
+        if not consent_id or not sca_url:
+            flash("Deutsche Bank consent creation failed — check DB_CLIENT_ID / DB_BASE_URL.", "error")
+            return redirect(url_for("index"))
+        session["db_consent_id"] = consent_id
+        return redirect(sca_url)
+    except deutschebank_client.DeutscheBankApiError as e:
+        flash(str(e), "error")
+        return redirect(url_for("index"))
+
+
+@app.route("/deutschebank/callback")
+@login_required
+def deutschebank_callback():
+    consent_id = session.pop("db_consent_id", None)
+    if not consent_id:
+        flash("Session expired. Please try connecting Deutsche Bank again.", "error")
+        return redirect(url_for("index"))
+    try:
+        token  = deutschebank_client.get_oauth_token()
+        status = deutschebank_client.get_consent_status(token, consent_id)
+        if status != "valid":
+            flash(f"Deutsche Bank consent not valid (status: {status}).", "warning")
+            return render_template("consent_pending.html", status=status)
+        _upsert_connection("deutschebank", consent_id=consent_id)
+        flash("Deutsche Bank connected. Accounts fetched.", "success")
+        return redirect(url_for("dashboard"))
+    except deutschebank_client.DeutscheBankApiError as e:
+        flash(str(e), "error")
+        return redirect(url_for("index"))
+
+
+# ── ING (mTLS + HTTP Signatures + OAuth2 authorization_code) ─────────────────
+
+@app.route("/ing/connect")
+@login_required
+def ing_connect():
+    try:
+        app_token   = ing_client.get_app_token()
+        redirect_uri = app.config["ING_REDIRECT_URI"]
+        auth_url    = ing_client.get_authorization_url(app_token, redirect_uri)
+        if not auth_url:
+            flash("ING authorization URL could not be obtained — check ING_CLIENT_ID / ING_CERT_PATH.", "error")
+            return redirect(url_for("index"))
+        return redirect(auth_url)
+    except ing_client.INGApiError as e:
+        flash(str(e), "error")
+        return redirect(url_for("index"))
+
+
+@app.route("/ing/callback")
+@login_required
+def ing_callback():
+    code = request.args.get("code")
+    if not code:
+        flash("ING authorisation failed — no code returned.", "error")
+        return redirect(url_for("index"))
+    try:
+        redirect_uri    = app.config["ING_REDIRECT_URI"]
+        customer_token  = ing_client.exchange_code(code, redirect_uri)
+        _upsert_connection("ing", access_token=customer_token)
+        flash("ING connected. Accounts fetched.", "success")
+        return redirect(url_for("dashboard"))
+    except ing_client.INGApiError as e:
         flash(str(e), "error")
         return redirect(url_for("index"))
 
