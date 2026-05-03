@@ -1,0 +1,22 @@
+{% extends "base.html" %}
+{% block content %}
+<h2>ING — Authorize Access</h2>
+
+<p>After logging in on ING's sandbox, you will be redirected to <code>https://www.example.com/</code>. The URL will contain a <code>code</code> parameter — copy it and paste below.</p>
+
+<p>Example redirect URL:</p>
+<pre style="background:var(--surface-2);padding:.75rem;border-radius:6px;font-size:.8rem;overflow-x:auto">https://www.example.com/?state=...&amp;code=<strong>PASTE-THIS-PART</strong></pre>
+
+{% with messages = get_flashed_messages(with_categories=true) %}
+  {% for cat, msg in messages %}
+    <p style="color:{% if cat == 'error' %}red{% else %}green{% endif %}">{{ msg }}</p>
+  {% endfor %}
+{% endwith %}
+
+<form method="post" action="{{ url_for('ing_enter_code') }}">
+  <label for="code" style="display:block;margin-bottom:.5rem;font-weight:600">Authorization Code</label>
+  <input type="text" id="code" name="code" placeholder="Paste the code from the URL here"
+         required style="width:100%;padding:.5rem;font-size:.9rem;border:1px solid var(--border);border-radius:4px">
+  <button type="submit" style="margin-top:1rem">Connect ING →</button>
+</form>
+{% endblock %}

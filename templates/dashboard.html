@@ -131,9 +131,9 @@
         <tr>
           <td class="mono text-muted" style="font-size:.75rem">{{ txn.booking_date }}</td>
           <td><span class="pill" style="background:
-            {% if acc.bank=='commerzbank' %}#e67e2218{% elif acc.bank=='nordea' %}#3498db18{% elif acc.bank=='hdfc' %}#e74c3c18{% elif acc.bank=='sbi' %}#9b59b618{% else %}#95a5a618{% endif %};
-            color:{% if acc.bank=='commerzbank' %}#e67e22{% elif acc.bank=='nordea' %}#3498db{% elif acc.bank=='hdfc' %}#e74c3c{% elif acc.bank=='sbi' %}#9b59b6{% else %}#95a5a6{% endif %};
-            border:1px solid {% if acc.bank=='commerzbank' %}#e67e2244{% elif acc.bank=='nordea' %}#3498db44{% elif acc.bank=='hdfc' %}#e74c3c44{% elif acc.bank=='sbi' %}#9b59b644{% else %}#95a5a644{% endif %}">
+            {% if acc.bank=='commerzbank' %}#e67e2218{% elif acc.bank=='nordea' %}#3498db18{% elif acc.bank=='unicredit' %}#c0392b18{% elif acc.bank=='deutschebank' %}#0018a818{% elif acc.bank=='ing' %}#FF620018{% else %}#95a5a618{% endif %};
+            color:{% if acc.bank=='commerzbank' %}#e67e22{% elif acc.bank=='nordea' %}#3498db{% elif acc.bank=='unicredit' %}#c0392b{% elif acc.bank=='deutschebank' %}#0018a8{% elif acc.bank=='ing' %}#FF6200{% else %}#95a5a6{% endif %};
+            border:1px solid {% if acc.bank=='commerzbank' %}#e67e2244{% elif acc.bank=='nordea' %}#3498db44{% elif acc.bank=='unicredit' %}#c0392b44{% elif acc.bank=='deutschebank' %}#0018a844{% elif acc.bank=='ing' %}#FF620044{% else %}#95a5a644{% endif %}">
             {{ acc.bank | upper }}</span></td>
           <td style="max-width:140px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:.8rem">
             {{ txn.creditor_name or txn.debtor_name or "—" }}</td>

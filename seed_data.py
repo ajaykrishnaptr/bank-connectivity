@@ -41,6 +41,15 @@ USERS = [
                      "name": "Sparkonto", "currency": "EUR"},
                 ],
             },
+            "ing": {
+                "access_token": "seeded-ing-priya",
+                "accounts": [
+                    {"resource_id": "ING-PRIYA-CUR", "iban": "NL91INGB0002445588",
+                     "name": "Betaalrekening", "currency": "EUR"},
+                    {"resource_id": "ING-PRIYA-SAV", "iban": "NL18INGB0009876541",
+                     "name": "Oranje Spaarrekening", "currency": "EUR"},
+                ],
+            },
         },
     },
     {

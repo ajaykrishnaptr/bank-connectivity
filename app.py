@@ -1,4 +1,5 @@
 import os
+import uuid
 
 from dotenv import load_dotenv
 from flask import Flask, flash, redirect, render_template, request, session, url_for
@@ -19,11 +20,11 @@ import psd2_client
 from models import Account, BankConnection, DismissedAlert, Transaction, User, db
 
 BANK_COLORS = {
-    "commerzbank": "#e67e22",
-    "nordea":      "#3498db",
-    "hdfc":        "#e74c3c",
-    "sbi":         "#9b59b6",
-    "unicredit":   "#c0392b",
+    "commerzbank":  "#e67e22",
+    "nordea":       "#3498db",
+    "unicredit":    "#c0392b",
+    "deutschebank": "#0018a8",
+    "ing":          "#FF6200",
 }
 
 
@@ -369,7 +370,11 @@ def _fetch_and_store(bank, conn):
             token = deutschebank_client.get_oauth_token()
             txn_data = deutschebank_client.get_transactions(token, conn.consent_id, acc.resource_id)
         elif bank == "ing":
-            txn_data = ing_client.get_transactions(conn.access_token, acc.resource_id)
+            try:
+                txn_data = ing_client.get_transactions(conn.access_token, acc.resource_id)
+            except ing_client.INGApiError as e:
+                print(f"[ING] Skipping account {acc.resource_id}: {e}")
+                continue
         else:
             txn_data = psd2_client.get_transactions(
                 app.config["SANDBOX_BASE_URL"], conn.consent_id, acc.resource_id)
@@ -900,34 +905,43 @@ def deutschebank_callback():
 @login_required
 def ing_connect():
     try:
-        app_token   = ing_client.get_app_token()
-        redirect_uri = app.config["ING_REDIRECT_URI"]
-        auth_url    = ing_client.get_authorization_url(app_token, redirect_uri)
-        if not auth_url:
-            flash("ING authorization URL could not be obtained — check ING_CLIENT_ID / ING_CERT_PATH.", "error")
-            return redirect(url_for("index"))
+        ing_client.get_app_token()  # validate credentials early
+        state    = str(uuid.uuid4())
+        session["ing_state"] = state
+        auth_url = ing_client.get_authorization_url(state)
         return redirect(auth_url)
     except ing_client.INGApiError as e:
         flash(str(e), "error")
         return redirect(url_for("index"))
 
 
-@app.route("/ing/callback")
+@app.route("/ing/enter-code", methods=["GET", "POST"])
 @login_required
-def ing_callback():
-    code = request.args.get("code")
-    if not code:
-        flash("ING authorisation failed — no code returned.", "error")
-        return redirect(url_for("index"))
-    try:
-        redirect_uri    = app.config["ING_REDIRECT_URI"]
-        customer_token  = ing_client.exchange_code(code, redirect_uri)
-        _upsert_connection("ing", access_token=customer_token)
-        flash("ING connected. Accounts fetched.", "success")
-        return redirect(url_for("dashboard"))
-    except ing_client.INGApiError as e:
-        flash(str(e), "error")
-        return redirect(url_for("index"))
+def ing_enter_code():
+    """After ING redirects to example.com, user copies the code here."""
+    if request.method == "POST":
+        raw = request.form.get("code", "").strip()
+        # Allow pasting either just the code or the full URL
+        if "code=" in raw:
+            from urllib.parse import urlparse, parse_qs
+            qs = urlparse(raw).query if raw.startswith("http") else raw
+            parsed = parse_qs(qs)
+            code = (parsed.get("code") or [""])[0]
+        else:
+            code = raw
+        if not code:
+            flash("Please paste the authorization code.", "error")
+            return render_template("ing_code.html")
+        try:
+            customer_token = ing_client.exchange_code(code)
+            session.pop("ing_state", None)
+            _upsert_connection("ing", access_token=customer_token)
+            flash("ING connected. Accounts fetched.", "success")
+            return redirect(url_for("dashboard"))
+        except ing_client.INGApiError as e:
+            flash(str(e), "error")
+            return render_template("ing_code.html")
+    return render_template("ing_code.html")
 
 
 # ── Account detail views (live API, DB-backed credentials) ───────────────────
