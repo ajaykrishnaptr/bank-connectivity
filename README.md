@@ -144,3 +144,33 @@ FintNet is a licensed-ready TPP. The goal is to expand direct PSD2 integrations 
 - TPP admin panel — manage users, connections, consent status (`role` column already in DB)
 - Expat view — side-by-side accounts across two countries for cross-border users
 - Tax category tagging — flag deductible expenses per country for freelancers
+
+---
+
+## Learning roadmap — MCP, Agentic AI, GenAI
+
+Concrete ways to layer modern AI capabilities onto FintNet for hands-on learning. Each topic maps cleanly onto a flagship addition with the highest learning value.
+
+### 1. MCP — Build an MCP server that exposes FintNet's data
+
+Wrap accounts, transactions, balances, and the recurring/waste detection as MCP tools and resources. Then Claude Desktop or Code can answer questions like *"what did Priya spend on groceries last month?"* against the live SQLite. Touches tool definitions, resource schemas, and the JSON-RPC handshake — the actual MCP protocol, not a framework abstraction.
+
+*Stretch:* a second MCP server that wraps Splunk to let Claude query `logs/fintnet.json` events.
+
+### 2. Agentic AI — A "financial advisor" agent over your own data
+
+Use the Anthropic SDK directly (not LangChain — frameworks hide the agent loop you want to learn). Give it 4–5 tools: `get_balance`, `get_transactions(filter)`, `get_recurring`, `categorize`, `web_search`. Ask it open-ended questions like *"Why did my spending jump in March?"* and watch it plan → call tool → observe → re-plan until it converges. Teaches the core agent loop, error handling, and tool design.
+
+*Stretch:* extend with a "TPP ops" agent that reads `logs/fintnet.json`, detects sync-rate regressions, and opens GitHub issues automatically (the existing scheduled-routines pattern is already half of this).
+
+### 3. GenAI — Replace `categorize.py` with an LLM categorizer
+
+The current `categorize.py` is keyword-matching. Swap it for Claude Haiku categorizing each merchant string, with prompt caching on the category taxonomy + few-shot examples. You'll get: foreign-language merchants handled correctly (Lidl, Lieferando, Mediamarkt all work; "Vapiano Düsseldorf Hbf" gets categorized as Food&Drink), measurable accuracy improvement, and hands-on with prompt caching, batch API, and cost optimization. Cache results in DB so you only pay once per merchant.
+
+*Stretch:* "Spending Q&A" chat — natural-language queries against the user's transactions ("restaurants over €50 in March"), which becomes a clean RAG-over-structured-data exercise.
+
+### Suggested order for max learning compounding
+
+1. Start with the **GenAI categorizer** (smallest scope, sharpest before/after, teaches caching + cost discipline).
+2. Then the **MCP server** (a clean data layer is already in place to expose).
+3. Then the **financial advisor agent** (which can reuse the MCP server as its tools — that's the elegant part).
