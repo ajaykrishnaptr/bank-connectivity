@@ -63,6 +63,24 @@ Visit: http://127.0.0.1:5000
 
 ---
 
+## Logging (Splunk-ready)
+
+Structured JSON events are written to `logs/fintnet.json` (rotated at 10 MB, keep 5 backups).
+
+**Events emitted today:**
+- `auth.login.success`, `auth.login.failed`, `auth.logout`, `auth.signup`
+- `connection.upsert`, `connection.disconnect`
+- `sync.complete` (with `latency_ms`, `account_count`, `bank`)
+- `sync.account.skipped` (per-account 403s on ING)
+
+Every event is a single-line JSON object with `ts`, `level`, `logger`, `event`, plus event-specific fields (`user_id`, `bank`, `email`, `latency_ms`, etc.) — all directly searchable in Splunk without regex parsing.
+
+**Splunk integration paths:**
+- **Universal Forwarder** (recommended) — install on the host, point at `logs/fintnet.json`. Resilient: app keeps running even if Splunk is down, events catch up when ingestion resumes.
+- **HEC handler** — swap `RotatingFileHandler` in `logging_config.py` for an HTTP Event Collector handler if direct shipping is preferred.
+
+---
+
 ## Seeding test data
 
 Populates the DB with 3 test users, bank connections, accounts, and ~6 months of transactions. Safe to re-run — clears and recreates test data each time.

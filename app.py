@@ -16,6 +16,7 @@ import db_utils
 import deutschebank_client
 import ing_client
 import nordea_client
+from logging_config import log
 import psd2_client
 from models import Account, BankConnection, DismissedAlert, Transaction, User, db
 
@@ -328,6 +329,7 @@ def _get_connection(bank):
 def _upsert_connection(bank, access_token=None, consent_id=None):
     """Save or update a BankConnection for current_user, then fetch and store data."""
     conn = BankConnection.query.filter_by(user_id=current_user.id, bank=bank).first()
+    is_new = conn is None
     if conn:
         conn.access_token = access_token
         conn.consent_id   = consent_id
@@ -339,12 +341,18 @@ def _upsert_connection(bank, access_token=None, consent_id=None):
         )
         db.session.add(conn)
     db.session.commit()
+    log.info("connection.upsert", extra={
+        "event": "connection.upsert", "user_id": conn.user_id,
+        "bank": bank, "is_new": is_new,
+    })
     _fetch_and_store(bank, conn)
     return conn
 
 
 def _fetch_and_store(bank, conn):
     """Fetch all accounts + transactions from the bank API and upsert into DB."""
+    import time as _time
+    t0 = _time.time()
     if bank == "nordea":
         account_list = nordea_client.get_accounts(conn.access_token)
     elif bank == "commerzbank":
@@ -373,12 +381,21 @@ def _fetch_and_store(bank, conn):
             try:
                 txn_data = ing_client.get_transactions(conn.access_token, acc.resource_id)
             except ing_client.INGApiError as e:
-                print(f"[ING] Skipping account {acc.resource_id}: {e}")
+                log.warning("sync.account.skipped", extra={
+                    "event": "sync.account.skipped", "user_id": conn.user_id,
+                    "bank": bank, "account_id": acc.resource_id,
+                    "status_code": e.status_code, "reason": str(e)[:200],
+                })
                 continue
         else:
             txn_data = psd2_client.get_transactions(
                 app.config["SANDBOX_BASE_URL"], conn.consent_id, acc.resource_id)
         db_utils.upsert_transactions(bank, acc.resource_id, txn_data)
+
+    log.info("sync.complete", extra={
+        "event": "sync.complete", "user_id": conn.user_id, "bank": bank,
+        "account_count": len(saved), "latency_ms": int((_time.time() - t0) * 1000),
+    })
 
 
 # ── Home ─────────────────────────────────────────────────────────────────────
@@ -430,6 +447,9 @@ def disconnect(bank):
     if conn:
         conn.status = "revoked"
         db.session.commit()
+        log.info("connection.disconnect", extra={
+            "event": "connection.disconnect", "user_id": current_user.id, "bank": bank,
+        })
     flash(f"Disconnected from {bank.capitalize()}.", "info")
     return redirect(url_for("index"))
 
@@ -446,7 +466,10 @@ def login():
         user = User.query.filter_by(email=email).first()
         if user and check_password_hash(user.password_hash, password):
             login_user(user)
+            log.info("auth.login.success", extra={"event": "auth.login.success",
+                                                   "user_id": user.id, "email": email})
             return redirect(request.args.get("next") or url_for("index"))
+        log.warning("auth.login.failed", extra={"event": "auth.login.failed", "email": email})
         flash("Invalid email or password.", "error")
     return render_template("login.html")
 
@@ -476,6 +499,8 @@ def signup():
             db.session.add(user)
             db.session.commit()
             login_user(user)
+            log.info("auth.signup", extra={"event": "auth.signup",
+                                           "user_id": user.id, "email": email})
             flash("Account created. Welcome!", "success")
             return redirect(url_for("index"))
     return render_template("signup.html")
@@ -484,6 +509,7 @@ def signup():
 @app.route("/logout")
 @login_required
 def logout():
+    log.info("auth.logout", extra={"event": "auth.logout", "user_id": current_user.id})
     session.clear()
     logout_user()
     return redirect(url_for("login"))
