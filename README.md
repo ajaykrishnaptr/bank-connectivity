@@ -163,9 +163,17 @@ Use the Anthropic SDK directly (not LangChain — frameworks hide the agent loop
 
 *Stretch:* extend with a "TPP ops" agent that reads `logs/fintnet.json`, detects sync-rate regressions, and opens GitHub issues automatically (the existing scheduled-routines pattern is already half of this).
 
-### 3. GenAI — Replace `categorize.py` with an LLM categorizer
+### 3. GenAI — LLM categorizer (✅ shipped)
 
-The current `categorize.py` is keyword-matching. Swap it for Claude Haiku categorizing each merchant string, with prompt caching on the category taxonomy + few-shot examples. You'll get: foreign-language merchants handled correctly (Lidl, Lieferando, Mediamarkt all work; "Vapiano Düsseldorf Hbf" gets categorized as Food&Drink), measurable accuracy improvement, and hands-on with prompt caching, batch API, and cost optimization. Cache results in DB so you only pay once per merchant.
+`categorize.py` is now a hybrid: hand-curated overrides → SQLite cache → local LLM (Ollama + Qwen 2.5 3B) with few-shot examples. Toggle via `USE_AI_CATEGORIZER=true` in `.env`. New merchants get one ~10-second LLM call, then are cached forever.
+
+**What it teaches:** classification prompts, constrained outputs, few-shot prompt engineering, cache-as-LLM-optimization, evaluation sets, and the production "LLM + overrides" pattern.
+
+**Files:**
+- `categorize.py` — three-tier router: overrides → cache → AI (with rules fallback)
+- `genai_test.py` — minimal "hello LLM" script
+- `eval_categorizer.py` — compares rule-based vs AI on real seeded merchants
+- `MerchantCategory` table in `models.py` — caches `(merchant → category, source)`
 
 *Stretch:* "Spending Q&A" chat — natural-language queries against the user's transactions ("restaurants over €50 in March"), which becomes a clean RAG-over-structured-data exercise.
 

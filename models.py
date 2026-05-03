@@ -75,6 +75,17 @@ class DismissedAlert(db.Model):
     )
 
 
+class MerchantCategory(db.Model):
+    """Cache of merchant -> category decisions (so the LLM is only asked once per merchant)."""
+    __tablename__ = "merchant_categories"
+
+    id         = db.Column(db.Integer, primary_key=True)
+    merchant   = db.Column(db.String(255), unique=True, nullable=False)
+    category   = db.Column(db.String(50), nullable=False)
+    source     = db.Column(db.String(20), nullable=False, default="ai")  # "ai" | "rule"
+    created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
+
+
 class BankConnection(db.Model):
     __tablename__ = "bank_connections"
 
