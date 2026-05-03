@@ -165,15 +165,23 @@ Use the Anthropic SDK directly (not LangChain — frameworks hide the agent loop
 
 ### 3. GenAI — LLM categorizer (✅ shipped)
 
-`categorize.py` is now a hybrid: hand-curated overrides → SQLite cache → local LLM (Ollama + Qwen 2.5 3B) with few-shot examples. Toggle via `USE_AI_CATEGORIZER=true` in `.env`. New merchants get one ~10-second LLM call, then are cached forever.
+`categorize.py` is now a three-tier hybrid: hand-curated overrides → SQLite cache → local LLM (Ollama + Qwen 2.5 3B) with few-shot examples. Toggle via `USE_AI_CATEGORIZER=true` in `.env`. New merchants get one ~10-second LLM call, then are cached forever.
 
-**What it teaches:** classification prompts, constrained outputs, few-shot prompt engineering, cache-as-LLM-optimization, evaluation sets, and the production "LLM + overrides" pattern.
+**What it teaches:** classification prompts, constrained outputs, few-shot prompt engineering, cache-as-LLM-optimization, evaluation sets, the production "LLM + overrides" pattern, and structured JSON output.
 
-**Files:**
-- `categorize.py` — three-tier router: overrides → cache → AI (with rules fallback)
+**Files shipped:**
+- `categorize.py` — three-tier router: overrides → cache → AI (with rules fallback). Includes `categorize_with_confidence()` returning `{category, confidence, reasoning}` JSON.
 - `genai_test.py` — minimal "hello LLM" script
-- `eval_categorizer.py` — compares rule-based vs AI on real seeded merchants
+- `eval_categorizer.py` — compares rule-based vs AI on real seeded merchants (surfaces zero-shot vs few-shot tradeoffs)
+- `genai_json_demo.py` — demo of structured JSON output with confidence + reasoning
+- `backfill_categories.py` — re-categorizes every existing Transaction via AI; reports a before/after category diff
 - `MerchantCategory` table in `models.py` — caches `(merchant → category, source)`
+
+**Real-world results on the 1,303 seeded transactions:**
+- `Transfers / Other` collapsed from 217 → 42 (LLM rescued 175 unknown merchants)
+- 6 inconsistent legacy category names (`Food & Drink`, `Health`, `Retail`, etc.) auto-merged into the canonical 13
+- ~38 merchants ended up in different categories — most for the better, a handful caught by overrides
+- Surfaced an LLM bias bug: Indian IT companies ("Infosys Ltd", "Wipro") wrongly routed to `Housing` — fix-list candidates for the override table
 
 *Stretch:* "Spending Q&A" chat — natural-language queries against the user's transactions ("restaurants over €50 in March"), which becomes a clean RAG-over-structured-data exercise.
 
