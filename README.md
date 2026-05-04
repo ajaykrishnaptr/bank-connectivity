@@ -180,11 +180,13 @@ Use the Anthropic SDK directly (not LangChain — frameworks hide the agent loop
 - `backfill_categories.py` — re-categorizes every existing Transaction via AI; reports a before/after category diff
 - `MerchantCategory` table in `models.py` — caches `(merchant → category, source)`
 
-**Real-world results on the ~691 seeded transactions:**
-- The LLM rescues merchants the keyword rules miss, collapsing the `Transfers / Other` bucket
-- Inconsistent legacy category names (`Food & Drink`, `Health`, `Retail`) auto-merge into the canonical 13
-- A subset of merchants land in different categories — most for the better, a handful caught by hand-curated overrides
-- Surfaced an LLM bias bug: Indian IT companies ("Infosys Ltd", "Wipro") wrongly routed to `Housing` — fixed in the override table
+**Real-world results on the 1,303 seeded transactions (latest backfill):**
+- 269 / 1,303 transactions updated, 15 distinct merchants flipped category
+- Legacy category names auto-merged into the canonical 13 — `Food & Drink` (122 → 0), `Health` (95 → 0), `Transfer` (25 → 0); the rows redistributed into `Dining` (+108), `Healthcare` (+71), `Groceries` (+24), and `Utilities` (+17)
+- `Food Delivery` (+14) split out from the old `Food & Drink` bucket — Lieferando recognised correctly
+- Surfaced LLM bias bugs:
+  - Indian IT companies ("Infosys Ltd", "Wipro") wrongly routed to `Housing` — fixed in the override table
+  - Salary-credit merchant names (`Siemens AG`, `PayPal Transfer`, `Kleinanzeigen Sale`) reclassified by merchant string alone, losing the "this is incoming money" context — candidates for the override table or a future amount-aware prompt
 
 *Stretch:* "Spending Q&A" chat — natural-language queries against the user's transactions ("restaurants over €50 in March"), which becomes a clean RAG-over-structured-data exercise.
 
