@@ -1,10 +1,23 @@
 """
-Backfill: re-categorize every existing transaction using the AI categorizer.
+Backfill: re-categorise every existing transaction using the current
+AI categorizer.
 
-Pulls unique merchants from the Transaction table, runs each through categorize()
-(which uses overrides → cache → LLM), then updates every Transaction row in bulk.
+Why you'd run this:
+  * Prompt changes — the LLM's answers shift, so old cached categories
+    on existing rows are now stale.
+  * New override added — rows previously categorised by the LLM should
+    pick up the override now.
 
-Reports before/after stats so you can see which categories shifted.
+How it works:
+  1. Walk every transaction, group rows by merchant string.
+  2. For each unique merchant, call `categorize()` once. That goes
+     through overrides → cache → LLM, so we only pay LLM cost for
+     genuinely new merchants.
+  3. Write the new category back to every row that disagrees with it.
+  4. Print a per-category diff and the merchants whose label flipped.
+
+Usage:
+    python3 backfill_categories.py
 """
 import time
 from collections import Counter
@@ -13,15 +26,22 @@ from app import app
 from categorize import categorize
 from models import MerchantCategory, Transaction, db
 
+# Print a progress line every N merchants so a long backfill doesn't
+# look frozen.
+_PROGRESS_EVERY = 10
+# How many flipped merchants to dump at the end. Keep small to avoid
+# spamming the terminal — full list is in the DB.
+_MAX_CHANGES_TO_PRINT = 15
 
-def main():
+
+def main() -> None:
     with app.app_context():
-        # Load every transaction's current category and merchant
-        rows = Transaction.query.all()
+        rows          = Transaction.query.all()
         before_counts = Counter(t.category for t in rows)
 
-        # Build the unique-merchant set
-        merchant_to_txns: dict[str, list] = {}
+        # Group transactions by their merchant string so each unique
+        # merchant only triggers one categorize() call.
+        merchant_to_txns: dict[str, list[Transaction]] = {}
         for t in rows:
             merchant = (t.creditor_name or t.debtor_name or "").strip()
             if not merchant:
@@ -35,14 +55,14 @@ def main():
         cache_before = MerchantCategory.query.count()
         print(f"Cache entries before:      {cache_before}\n")
 
-        t0 = time.time()
-        processed = 0
-        changed_txns = 0
-        merchant_changes = []  # (merchant, before, after)
+        t0               = time.time()
+        processed        = 0
+        changed_txns     = 0
+        merchant_changes: list[tuple[str, list[str], str]] = []
 
         for merchant in unique_merchants:
             new_category = categorize(merchant)
-            txns = merchant_to_txns[merchant]
+            txns         = merchant_to_txns[merchant]
 
             old_category_set = {t.category for t in txns}
             for t in txns:
@@ -54,22 +74,23 @@ def main():
                 merchant_changes.append((merchant, sorted(old_category_set), new_category))
 
             processed += 1
-            if processed % 10 == 0:
+            if processed % _PROGRESS_EVERY == 0:
                 elapsed = time.time() - t0
                 print(f"  ... {processed}/{len(unique_merchants)} merchants "
                       f"({elapsed:.0f}s elapsed)")
 
         db.session.commit()
 
-        elapsed = time.time() - t0
+        elapsed     = time.time() - t0
         cache_after = MerchantCategory.query.count()
+        # Re-read from the DB so the diff reflects what's actually committed.
         after_counts = Counter(t.category for t in Transaction.query.all())
 
         print(f"\n=== DONE in {elapsed:.0f}s ===")
         print(f"Transactions updated:      {changed_txns} / {len(rows)}")
         print(f"Cache grew:                {cache_before} -> {cache_after}")
 
-        # Category-level diff
+        # Per-category diff: how many txns landed in each bucket before/after.
         all_categories = sorted(set(before_counts) | set(after_counts))
         print(f"\nCategory diff (before -> after):")
         print(f"  {'category':<25} | {'before':>6} | {'after':>6} | delta")
@@ -81,11 +102,10 @@ def main():
             arrow = "" if delta == 0 else (f"  ↑ +{delta}" if delta > 0 else f"  ↓ {delta}")
             print(f"  {(c or '<None>'):<25} | {b:>6} | {a:>6} | {arrow}")
 
-        # Per-merchant changes (sample)
         if merchant_changes:
             print(f"\nMerchants whose category changed: {len(merchant_changes)}")
-            print(f"  (showing first 15)")
-            for merchant, before, after in merchant_changes[:15]:
+            print(f"  (showing first {_MAX_CHANGES_TO_PRINT})")
+            for merchant, before, after in merchant_changes[:_MAX_CHANGES_TO_PRINT]:
                 print(f"  {merchant:<35} : {','.join(before):<22} -> {after}")
 
 
