@@ -1,6 +1,6 @@
 # FintNet — Financial Institutions Integration Network
 
-Connect European bank accounts in one place. FintNet fetches accounts, balances, and transactions via secure bank APIs and presents a unified view — including cross-border, multi-currency consolidation.
+Connect European bank accounts in one place. FintNet fetches accounts, balances, and transactions via secure bank APIs and presents a unified view — including cross-border, multi-currency consolidation, and **on-device transaction categorisation powered by a local LLM (Ollama + Qwen 2.5 3B)** — no cloud calls, no API costs, transaction data never leaves the machine.
 
 ---
 
@@ -50,6 +50,79 @@ ING is the most complex integration:
   - All Bearer-token calls (code exchange, AIS): `keyId="<client_id>"`, signature in `Signature` header, no TPP cert
 - Sandbox example client uses pre-registered redirect URI `https://www.example.com/`. After authorization the user lands there with `?code=...` in the URL bar — paste it at `/ing/enter-code` to complete connection.
 - Per-account grants vary by sandbox test profile — `_fetch_and_store` catches `INGApiError` 403s and skips accounts without grant, so the connection still saves.
+
+---
+
+## Transaction categorisation — local LLM, fully offline
+
+Every transaction is auto-categorised into one of 14 buckets (Groceries, Utilities, Dining, Income, ...) by a **four-layer waterfall** designed so the cheapest layers handle the easy cases and the model is consulted as a last resort:
+
+1. **Hand-curated overrides** — short list of merchants the LLM is reliably wrong about (e.g. "Infosys Ltd" → Income, not Housing). Beats every layer below.
+2. **SQLite cache** (`MerchantCategory` table) — once we've seen "Lieferando", we never ask the LLM about it again. Subsequent transactions are a single row read.
+3. **Local LLM** — Ollama running **Qwen 2.5 3B** on the developer's machine. ~10 seconds on a brand-new merchant, then cached forever. Few-shot prompted with examples spanning German + Indian + Nordic merchants for cross-border accuracy.
+4. **Keyword rules** — pure-Python fallback if Ollama isn't running or returns garbage.
+
+Toggle the AI path with `USE_AI_CATEGORIZER=true` in `.env`. `false` → deterministic rules only (useful in tests).
+
+### Why local instead of OpenAI / Anthropic API?
+
+- **🔒 Privacy** — bank transactions never leave the device. The whole point of a TPP is to be a trustworthy custodian of financial data; sending merchant strings to a cloud LLM would undo that.
+- **💰 Cost** — categorising 1,303 seeded transactions cost **€0**. A cloud-LLM equivalent at scale (10k users × dozens of new merchants/month) would compound into real spend; the cache + local-model design proves the architecture works on a laptop and scales without a per-call line item.
+- **🎯 Determinism** — `temperature=0` plus the cache means the same merchant string produces the same category every time. Reproducible analytics.
+- **⚡ No rate limits, no network dependency** — works offline, no provider outage to plan around.
+
+### Structured JSON output with confidence + reasoning
+
+`categorize_with_confidence(merchant)` asks the model for a structured response:
+
+```json
+{
+  "category": "Utilities",
+  "confidence": "high",
+  "reasoning": "Vattenfall is a Swedish electricity and heating provider"
+}
+```
+
+Powers the dashboard's "explain" panel and the `genai_json_demo.py` demo script. Defensive parsing handles markdown code fences and trailing comments — the model occasionally wraps its answer in ```json fences``` and we strip them before `json.loads`.
+
+### Real-world impact (latest backfill on 1,303 seeded transactions)
+
+Running `python3 backfill_categories.py`:
+
+- **269 / 1,303 transactions** reclassified, **15 distinct merchants** flipped bucket
+- **Legacy category names auto-merged into the canonical 13:** `Food & Drink` (122 → 0), `Health` (95 → 0), `Transfer` (25 → 0). Rows redistributed into `Dining` (+108), `Healthcare` (+71), `Groceries` (+24), `Utilities` (+17), `Food Delivery` (+14)
+- **Surfaced LLM bias bugs that became override entries:**
+  - Indian IT companies ("Infosys Ltd", "Wipro") → wrongly routed to `Housing` (the LLM reads "Ltd" as a property firm)
+  - Salary-credit merchant strings ("Siemens AG", "PayPal Transfer") get reclassified by name alone, losing the "this is incoming money" context — candidate for an amount-aware prompt
+
+### Files
+
+| File | Purpose |
+|------|---------|
+| `categorize.py` | The four-layer waterfall + `categorize_with_confidence()` for JSON output |
+| `backfill_categories.py` | Re-categorise every existing Transaction; print before/after category diff |
+| `eval_categorizer.py` | Compare keyword rules vs AI on real seeded merchants — surfaces zero-shot vs few-shot tradeoffs |
+| `genai_json_demo.py` | Demo of structured JSON with confidence + reasoning |
+| `genai_test.py` | Minimal "hello LLM" prompt for hacking on the prompt template |
+| `models.MerchantCategory` | DB cache so the LLM sees each unique merchant at most once |
+
+### Setup
+
+```bash
+# 1. Install Ollama (https://ollama.com) and pull the model
+ollama pull qwen2.5:3b
+
+# 2. Enable the AI path in .env
+echo "USE_AI_CATEGORIZER=true" >> .env
+
+# 3. Seed test data — categorisation runs automatically
+python3 seed_data.py
+
+# 4. (Optional) Backfill any pre-existing transactions
+python3 backfill_categories.py
+```
+
+What it teaches: classification prompts, constrained outputs, few-shot prompting, cache-as-LLM-cost-control, the production "LLM + overrides" pattern, structured JSON output, and evaluation sets.
 
 ---
 
@@ -141,48 +214,18 @@ Each current account includes:
 
 ---
 
-## Learning roadmap — MCP, Agentic AI, GenAI
+## Next AI building blocks (planned)
 
-Concrete ways to layer modern AI capabilities onto FintNet for hands-on learning. Each topic maps cleanly onto a flagship addition with the highest learning value.
+The local-LLM categoriser is shipped (above). Two further AI capabilities are next:
 
-### 1. MCP — Build an MCP server that exposes FintNet's data
+### MCP server exposing FintNet's data
 
-Wrap accounts, transactions, balances, and the recurring/waste detection as MCP tools and resources. Then Claude Desktop or Code can answer questions like *"what did Priya spend on groceries last month?"* against the live SQLite. Touches tool definitions, resource schemas, and the JSON-RPC handshake — the actual MCP protocol, not a framework abstraction.
+Wrap accounts, transactions, balances, and the recurring/waste detection as MCP tools and resources, so Claude Desktop or Code can answer questions like *"what did Priya spend on groceries last month?"* against the live SQLite. Touches tool definitions, resource schemas, and the JSON-RPC handshake — the actual MCP protocol, not a framework abstraction.
 
 *Stretch:* a second MCP server that wraps Splunk to let Claude query `logs/fintnet.json` events.
 
-### 2. Agentic AI — A "financial advisor" agent over your own data
+### Agentic "financial advisor" over your own data
 
-Use the Anthropic SDK directly (not LangChain — frameworks hide the agent loop you want to learn). Give it 4–5 tools: `get_balance`, `get_transactions(filter)`, `get_recurring`, `categorize`, `web_search`. Ask it open-ended questions like *"Why did my spending jump in March?"* and watch it plan → call tool → observe → re-plan until it converges. Teaches the core agent loop, error handling, and tool design.
+Use the Anthropic SDK directly (not LangChain — frameworks hide the agent loop you want to learn). Give it 4–5 tools: `get_balance`, `get_transactions(filter)`, `get_recurring`, `categorize`, `web_search`. Ask it open-ended questions like *"Why did my spending jump in March?"* and watch it plan → call tool → observe → re-plan until it converges.
 
-*Stretch:* extend with a "TPP ops" agent that reads `logs/fintnet.json`, detects sync-rate regressions, and opens GitHub issues automatically (the existing scheduled-routines pattern is already half of this).
-
-### 3. GenAI — LLM categorizer (✅ shipped)
-
-`categorize.py` is now a three-tier hybrid: hand-curated overrides → SQLite cache → local LLM (Ollama + Qwen 2.5 3B) with few-shot examples. Toggle via `USE_AI_CATEGORIZER=true` in `.env`. New merchants get one ~10-second LLM call, then are cached forever.
-
-**What it teaches:** classification prompts, constrained outputs, few-shot prompt engineering, cache-as-LLM-optimization, evaluation sets, the production "LLM + overrides" pattern, and structured JSON output.
-
-**Files shipped:**
-- `categorize.py` — three-tier router: overrides → cache → AI (with rules fallback). Includes `categorize_with_confidence()` returning `{category, confidence, reasoning}` JSON.
-- `genai_test.py` — minimal "hello LLM" script
-- `eval_categorizer.py` — compares rule-based vs AI on real seeded merchants (surfaces zero-shot vs few-shot tradeoffs)
-- `genai_json_demo.py` — demo of structured JSON output with confidence + reasoning
-- `backfill_categories.py` — re-categorizes every existing Transaction via AI; reports a before/after category diff
-- `MerchantCategory` table in `models.py` — caches `(merchant → category, source)`
-
-**Real-world results on the 1,303 seeded transactions (latest backfill):**
-- 269 / 1,303 transactions updated, 15 distinct merchants flipped category
-- Legacy category names auto-merged into the canonical 13 — `Food & Drink` (122 → 0), `Health` (95 → 0), `Transfer` (25 → 0); the rows redistributed into `Dining` (+108), `Healthcare` (+71), `Groceries` (+24), and `Utilities` (+17)
-- `Food Delivery` (+14) split out from the old `Food & Drink` bucket — Lieferando recognised correctly
-- Surfaced LLM bias bugs:
-  - Indian IT companies ("Infosys Ltd", "Wipro") wrongly routed to `Housing` — fixed in the override table
-  - Salary-credit merchant names (`Siemens AG`, `PayPal Transfer`, `Kleinanzeigen Sale`) reclassified by merchant string alone, losing the "this is incoming money" context — candidates for the override table or a future amount-aware prompt
-
-*Stretch:* "Spending Q&A" chat — natural-language queries against the user's transactions ("restaurants over €50 in March"), which becomes a clean RAG-over-structured-data exercise.
-
-### Suggested order for max learning compounding
-
-1. Start with the **GenAI categorizer** (smallest scope, sharpest before/after, teaches caching + cost discipline).
-2. Then the **MCP server** (a clean data layer is already in place to expose).
-3. Then the **financial advisor agent** (which can reuse the MCP server as its tools — that's the elegant part).
+*Stretch:* "Spending Q&A" chat — natural-language queries against the user's transactions ("restaurants over €50 in March") as a clean RAG-over-structured-data exercise.
