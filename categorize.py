@@ -19,10 +19,22 @@ USE_AI = os.getenv("USE_AI_CATEGORIZER", "true").lower() == "true"
 # Checked BEFORE the LLM (and before the cache) — keep this list small.
 # Match is a case-insensitive substring check on the merchant name.
 _OVERRIDES = [
-    ("telekom",         "Utilities"),         # Deutsche Telekom, T-Mobile, etc.
-    ("vodafone",        "Utilities"),         # Telco
-    ("deutsche bank",   "Transfers / Other"), # Interbank transfers, not income
-    ("commerzbank",     "Transfers / Other"),
+    # Utilities / telcos
+    ("telekom",          "Utilities"),         # Deutsche Telekom, T-Mobile, etc.
+    ("vodafone",         "Utilities"),
+    # Banks (interbank transfers, not income)
+    ("deutsche bank",    "Transfers / Other"),
+    ("commerzbank",      "Transfers / Other"),
+    # Indian IT employers (LLM kept routing these to Housing — clear bug)
+    ("infosys",          "Income"),
+    ("wipro",            "Income"),
+    ("tata consultancy", "Income"),
+    ("freelance",        "Income"),
+    # Specific retailers the LLM mishandled
+    ("heinemann",        "Shopping"),         # duty-free retailer, not Housing
+    # Finnish-specific merchants
+    ("helsinkimissio",   "Charity"),          # Finnish charity, not Transport
+    ("kela",             "Income"),           # Finnish social security benefits
 ]
 
 CATEGORIES = [
