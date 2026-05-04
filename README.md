@@ -118,11 +118,7 @@ Each current account includes:
 
 ---
 
-## Roadmap
-
-### Growing the TPP (becoming the aggregator)
-
-FintNet is a licensed-ready TPP. The goal is to expand direct PSD2 integrations bank by bank — no third-party aggregator, full data ownership, no per-connection fees.
+## Roadmap (technical)
 
 **Pending setup**
 - [ ] Deutsche Bank sandbox credentials — register at [developer.db.com](https://developer.db.com), then add to `.env`:
@@ -130,23 +126,18 @@ FintNet is a licensed-ready TPP. The goal is to expand direct PSD2 integrations 
   - `DB_SANDBOX_PSU_ID` (from Dashboard → My Test Users)
   - `DB_BASE_URL`, `DB_TOKEN_URL` (from your app's API docs page after registration)
 
-**Next banks to integrate**
+**More banks to integrate**
 - Santander (Spain/Portugal) — Berlin Group, good sandbox
 - BNP Paribas (France) — Berlin Group, large retail footprint
 - HSBC (UK/Europe) — post-Brexit but active PSD2 API
 - BBVA (Spain) — Berlin Group, strong open API ecosystem
 
-**Infrastructure needed to scale**
+**Infrastructure to add**
 - Bank registry — config-driven bank catalogue (name, country, spec, base URL, auth method) so adding a new bank doesn't require a new client file
 - Unified PSD2 adapter — single client that handles Berlin Group NextGenPSD2 spec (covers ~80% of EU banks); keep bespoke clients only for non-standard banks (Nordea, UniCredit)
 - Token refresh / expiry handling — mark connection as `expired`, show Reconnect button
 - Background data sync — periodic re-fetch of transactions per active connection
 - Consent renewal — auto-prompt users before 90-day consent windows expire
-
-**Platform features**
-- TPP admin panel — manage users, connections, consent status (`role` column already in DB)
-- Expat view — side-by-side accounts across two countries for cross-border users
-- Tax category tagging — flag deductible expenses per country for freelancers
 
 ---
 
