@@ -72,6 +72,9 @@ Structured JSON events are written to `logs/fintnet.json` (rotated at 10 MB, kee
 - `connection.upsert`, `connection.disconnect`
 - `sync.complete` (with `latency_ms`, `account_count`, `bank`)
 - `sync.account.skipped` (per-account 403s on ING)
+- `categorize.cached`, `categorize.ai.failed`, `categorize.ai.unknown_label`, `categorize.json.parse_failed`
+- `currency.fetch_failed` (frankfurter.app unreachable, falling back to hardcoded ECB rates)
+- `ing.customer_token` (scope + expires_in after a successful ING code exchange)
 
 Every event is a single-line JSON object with `ts`, `level`, `logger`, `event`, plus event-specific fields (`user_id`, `bank`, `email`, `latency_ms`, etc.) — all directly searchable in Splunk without regex parsing.
 
@@ -177,11 +180,11 @@ Use the Anthropic SDK directly (not LangChain — frameworks hide the agent loop
 - `backfill_categories.py` — re-categorizes every existing Transaction via AI; reports a before/after category diff
 - `MerchantCategory` table in `models.py` — caches `(merchant → category, source)`
 
-**Real-world results on the 1,303 seeded transactions:**
-- `Transfers / Other` collapsed from 217 → 42 (LLM rescued 175 unknown merchants)
-- 6 inconsistent legacy category names (`Food & Drink`, `Health`, `Retail`, etc.) auto-merged into the canonical 13
-- ~38 merchants ended up in different categories — most for the better, a handful caught by overrides
-- Surfaced an LLM bias bug: Indian IT companies ("Infosys Ltd", "Wipro") wrongly routed to `Housing` — fix-list candidates for the override table
+**Real-world results on the ~691 seeded transactions:**
+- The LLM rescues merchants the keyword rules miss, collapsing the `Transfers / Other` bucket
+- Inconsistent legacy category names (`Food & Drink`, `Health`, `Retail`) auto-merge into the canonical 13
+- A subset of merchants land in different categories — most for the better, a handful caught by hand-curated overrides
+- Surfaced an LLM bias bug: Indian IT companies ("Infosys Ltd", "Wipro") wrongly routed to `Housing` — fixed in the override table
 
 *Stretch:* "Spending Q&A" chat — natural-language queries against the user's transactions ("restaurants over €50 in March"), which becomes a clean RAG-over-structured-data exercise.
 
