@@ -104,6 +104,7 @@ Running `python3 backfill_categories.py`:
 | `eval_categorizer.py` | Compare keyword rules vs AI on real seeded merchants — surfaces zero-shot vs few-shot tradeoffs |
 | `genai_json_demo.py` | Demo of structured JSON with confidence + reasoning |
 | `genai_test.py` | Minimal "hello LLM" prompt for hacking on the prompt template |
+| `agent.py` | Tool-using agent loop over the transactions DB (see section below) |
 | `models.MerchantCategory` | DB cache so the LLM sees each unique merchant at most once |
 
 ### Setup
@@ -123,6 +124,26 @@ python3 backfill_categories.py
 ```
 
 What it teaches: classification prompts, constrained outputs, few-shot prompting, cache-as-LLM-cost-control, the production "LLM + overrides" pattern, structured JSON output, and evaluation sets.
+
+---
+
+## Tool-using agent (`agent.py`)
+
+A small CLI that turns the LLM from a *classifier* into a *planner*. Run it like:
+
+```bash
+python3 agent.py "how much did I spend on groceries in the last 30 days?"
+```
+
+The script implements the canonical agent loop by hand — no LangChain, no framework — so the moving parts are visible:
+
+1. **System prompt** declares two tools (`total_spent`, `top_merchants`) and a strict JSON output schema with two shapes: `{"action": "tool_call", ...}` or `{"action": "answer", ...}`.
+2. **JSON mode** (`format="json"` on the Ollama chat API) forces every model turn to be parseable in one `json.loads()` — no regex over prose.
+3. **Loop** — at most 5 turns: parse → if tool call, run the Python function and append the result as a `role: "tool"` message → if answer, print and exit.
+
+Tools deliberately return *small scalar summaries* (`{count, inflow, outflow, net}`) instead of raw transaction lists. Real-world lesson learned the hard way: dumping 50 rows back into the prompt blew up CPU prompt evaluation on `qwen2.5:3b` and timed out the loop. Agent frameworks paginate, summarise, or use handles for the same reason — context is expensive.
+
+**Status: seed implementation, runs end-to-end on M-series hardware.** On Intel/CPU-only Macs each turn is minutes, not seconds — the loop is correct but the model is too slow to be useful there. This is the foundation for the Anthropic-SDK agent listed under *Next AI building blocks* below.
 
 ---
 
@@ -226,6 +247,6 @@ Wrap accounts, transactions, balances, and the recurring/waste detection as MCP 
 
 ### Agentic "financial advisor" over your own data
 
-Use the Anthropic SDK directly (not LangChain — frameworks hide the agent loop you want to learn). Give it 4–5 tools: `get_balance`, `get_transactions(filter)`, `get_recurring`, `categorize`, `web_search`. Ask it open-ended questions like *"Why did my spending jump in March?"* and watch it plan → call tool → observe → re-plan until it converges.
+A first iteration ships as `agent.py` (see section above) — local LLM + two tools, hand-written loop. The next step is to swap Ollama for the Anthropic SDK so the model is fast and capable enough for open-ended planning, and grow the toolset to 4–5 entries: `get_balance`, `get_transactions(filter)`, `get_recurring`, `categorize`, `web_search`. Goal: ask *"Why did my spending jump in March?"* and watch it plan → call tool → observe → re-plan until it converges.
 
 *Stretch:* "Spending Q&A" chat — natural-language queries against the user's transactions ("restaurants over €50 in March") as a clean RAG-over-structured-data exercise.
