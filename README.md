@@ -51,6 +51,27 @@ ING is the most complex integration:
 - Sandbox example client uses pre-registered redirect URI `https://www.example.com/`. After authorization the user lands there with `?code=...` in the URL bar — paste it at `/ing/enter-code` to complete connection.
 - Per-account grants vary by sandbox test profile — `_fetch_and_store` catches `INGApiError` 403s and skips accounts without grant, so the connection still saves.
 
+### UniCredit flow specifics — self-hosted OCSP & CRL
+
+The UniCredit gateway is strict about revocation:
+- It **hard-fails** if the AIA OCSP host is unreachable (NXDOMAIN counts as a hard fail, not "OCSP unavailable").
+- It **refuses `https://` CRL DPs** — most F5 SSL profiles only follow `http://` (or `ldap://`) for revocation lookups, to avoid a chicken-and-egg of "validate this cert chain by validating *that* cert chain".
+
+So a vanilla self-signed eIDAS chain isn't enough. The leaf has to point at OCSP and CRL endpoints we actually run, over plain HTTP. Setup:
+
+- `generate_psd2_cert.py` mints the QWAC chain (root + intermediate + leaf) with ETSI PSD2 `qcStatements` (PSP_AI role, BaFin authority, PSDDE-BAFIN-19337 ID). Leaf AIA / CRLDP point at:
+  - `http://ocsp.fintnet.ai` — OCSP responder
+  - `http://crl.fintnet.ai/crl.crl` — CRL distribution point
+  - `http://crl.fintnet.ai/inter.crt` — AIA CA Issuers (path validation fallback)
+- `generate_ocsp_signer.py` mints a delegate OCSP signer (EKU `id-kp-OCSPSigning`, plus `id-pkix-ocsp-nocheck` to break recursion). The intermediate's private key never leaves the laptop — the VM only holds the delegate's key.
+- Both endpoints are served from a single Always-Free Oracle Cloud VM:
+  - `openssl ocsp -port 8888` is the signing backend (loads `chain.crt`, `ocsp_signer.{crt,key}`, and an `index.txt` listing valid serials).
+  - A ~50-line Python proxy (stdlib only) listens on port 80, serves `/crl.crl` + `/inter.crt` static, and forwards every other request to the openssl backend.
+  - Both as systemd services. Two A records (`crl`, `ocsp`) at GoDaddy point at the VM.
+- After every leaf re-issue, `generate_psd2_cert.py` also writes `certs/ocsp_index.txt` — the new serial gets a `V` (valid) line that's pushed to the responder so OCSP returns "good" for it.
+
+The bank still has to import `chain.crt` once into its trust store; subsequent leaf re-issues under the same intermediate don't need re-trust.
+
 ---
 
 ## Transaction categorisation — local LLM, fully offline

@@ -400,7 +400,7 @@ def _detect_waste(fixed, all_recurring, income, all_txns):
 # clear. Defaults are localhost so a fresh checkout runs without env vars.
 app = Flask(__name__)
 app.secret_key = os.getenv("FLASK_SECRET_KEY", "dev-secret")
-app.config["SANDBOX_BASE_URL"]        = os.getenv("SANDBOX_BASE_URL",     "https://developer.unicredit.eu")
+app.config["SANDBOX_BASE_URL"]        = os.getenv("SANDBOX_BASE_URL",     "https://api-sandbox.unicredit.it")
 app.config["REDIRECT_URI"]            = os.getenv("REDIRECT_URI",        "http://localhost:5000/callback")
 app.config["CB_REDIRECT_URI"]         = os.getenv("CB_REDIRECT_URI",     "http://localhost:5000/commerzbank/callback")
 app.config["NORDEA_REDIRECT_URI"]     = os.getenv("NORDEA_REDIRECT_URI", "http://localhost:5000/nordea/callback")
@@ -1295,4 +1295,7 @@ if __name__ == "__main__":
     # `debug=True` enables the auto-reloader and the in-browser debugger.
     # NEVER set this in production — the debugger lets anyone with HTTP
     # access execute Python on the server.
-    app.run(debug=True)
+    # `ssl_context='adhoc'` serves over HTTPS with a self-signed cert,
+    # which UniCredit's redirect_uri (https://localhost:5000/callback)
+    # requires. Browser will warn once — accept the cert and proceed.
+    app.run(debug=True, ssl_context="adhoc")

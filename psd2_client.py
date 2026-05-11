@@ -1,23 +1,34 @@
 """
-Generic Berlin-Group NextGenPSD2 client (used for UniCredit's sandbox).
+Berlin-Group NextGenPSD2 client targeting UniCredit's Hydrogen sandbox.
 
 The PSD2 standard defines a uniform shape for AIS (Account
 Information Services) endpoints — `/consents`, `/accounts`,
 `/balances`, `/transactions` — but every bank takes liberties on top.
-This module talks the vanilla protocol; bank-specific quirks live in
-`commerzbank_client.py`, `nordea_client.py`, etc.
+This module talks UniCredit's flavour of the protocol; other banks'
+quirks live in `commerzbank_client.py`, `nordea_client.py`, etc.
 
 Authentication: mTLS only. The TPP (us) presents a QWAC certificate
 on every request via `requests`'s `cert=` parameter. The bank's
 sandbox provides test certificates — see `generate_psd2_cert.py` and
 the README.
 
+UniCredit-specific quirks (confirmed by diffing a working TPP's call
+captured from UniCredit Splunk on 2026-05-11):
+  * API prefix is `/hydrogen/v1/...`, NOT the Berlin Group canonical
+    `/psd2/v2/...` or `/xs2a/v1/...`. Other prefixes are blocked by
+    F5 with HTTP 403 before reaching the app.
+  * Required custom headers beyond Berlin Group standard:
+      X-Country, X-Legal-Entity (e.g. "UI" = UniCredit Italia),
+      X-API-BaseContextURL, PSU-ID-Type, TPP-Redirect-Preferred.
+    Without these the app returns FORMAT_ERROR.
+  * PSU-IP-Address: must be a routable public IP. 127.0.0.1 / 0.0.0.0
+    are rejected. Sandbox accepts "1.1.1.1" as a test value.
+  * TPP-Redirect-URI must be HTTPS and is sent as a HEADER, not a
+    query parameter.
+
 Identity threading:
   * Every request carries a fresh `X-Request-ID` UUID for tracing.
   * A `Consent-ID` header is added once we have one.
-  * `PSU-IP-Address` is required on data requests; we fix it to
-    127.0.0.1 because we don't have the real user IP in this dev
-    setup. In production this should be the actual client IP.
 """
 import os
 import uuid
@@ -33,8 +44,14 @@ load_dotenv()
 CERT = (os.getenv("CERT_PATH", "certs/cert.pem"),
         os.getenv("KEY_PATH",  "certs/key.pem"))
 
-# Hard-coded for sandbox; production should set this from the request.
-_PSU_IP_ADDRESS = "127.0.0.1"
+# Routable public IP; UniCredit sandbox rejects 127.0.0.1. In production
+# this should be the actual client IP from the inbound request.
+_PSU_IP_ADDRESS = os.getenv("UC_PSU_IP_ADDRESS", "1.1.1.1")
+
+# UniCredit subsidiary the request is routed to. "UI" = UniCredit Italia.
+# Other group entities (DE, AT, etc.) would use different codes.
+_X_COUNTRY      = os.getenv("UC_X_COUNTRY",      "IT")
+_X_LEGAL_ENTITY = os.getenv("UC_X_LEGAL_ENTITY", "UI")
 
 # How long a fresh consent stays valid. The Berlin Group spec caps
 # this at 365 days for AIS, which is what we use.
@@ -55,14 +72,22 @@ class PSD2ApiError(Exception):
         self.status_code = status_code
 
 
-def _headers(consent_id: str | None = None) -> dict:
-    """Standard Berlin-Group request headers. Pass `consent_id` for
-    data endpoints; omit for consent-creation calls."""
+def _headers(base_url: str, consent_id: str | None = None) -> dict:
+    """Request headers for UniCredit's Hydrogen sandbox.
+
+    Pass `consent_id` for data endpoints; omit for consent creation.
+    The `base_url` is echoed back to UniCredit in `X-API-BaseContextURL`
+    so the gateway can construct callback URLs that point back at itself.
+    """
     h = {
-        "X-Request-ID":    str(uuid.uuid4()),
-        "PSU-IP-Address":  _PSU_IP_ADDRESS,
-        "Content-Type":    "application/json",
-        "Accept":          "application/json",
+        "X-Request-ID":           str(uuid.uuid4()),
+        "PSU-ID-Type":            "ALL",
+        "PSU-IP-Address":         _PSU_IP_ADDRESS,
+        "X-Country":              _X_COUNTRY,
+        "X-Legal-Entity":         _X_LEGAL_ENTITY,
+        "X-API-BaseContextURL":   base_url,
+        "Content-Type":           "application/json",
+        "Accept":                 "application/json",
     }
     if consent_id:
         h["Consent-ID"] = consent_id
@@ -99,15 +124,17 @@ def create_consent(base_url: str, redirect_uri: str) -> dict:
     """
     valid_until = (datetime.today() + timedelta(days=_CONSENT_VALID_DAYS)).strftime("%Y-%m-%d")
     body = {
-        "access": {"accounts": [], "balances": [], "transactions": []},
+        "access":                   {"allPsd2": "allAccounts"},
         "recurringIndicator":       True,
         "validUntil":               valid_until,
         "frequencyPerDay":          4,
         "combinedServiceIndicator": False,
     }
-    return _call("POST", f"{base_url}/psd2/v2/consents",
-                 headers=_headers(), json=body,
-                 params={"TPP-Redirect-URI": redirect_uri})
+    headers = _headers(base_url)
+    headers["TPP-Redirect-Preferred"] = "true"
+    headers["TPP-Redirect-URI"]       = redirect_uri
+    return _call("POST", f"{base_url}/hydrogen/v1/consents",
+                 headers=headers, json=body)
 
 
 def get_consent_status(base_url: str, consent_id: str) -> dict:
@@ -116,22 +143,22 @@ def get_consent_status(base_url: str, consent_id: str) -> dict:
     Useful values: "received" (created but not yet authenticated),
     "valid" (SCA done, ready to use), "rejected", "expired", "revokedByPsu".
     """
-    return _call("GET", f"{base_url}/psd2/v2/consents/{consent_id}/status",
-                 headers=_headers())
+    return _call("GET", f"{base_url}/hydrogen/v1/consents/{consent_id}/status",
+                 headers=_headers(base_url))
 
 
 def get_accounts(base_url: str, consent_id: str) -> list:
     """List of accounts the consent grants access to."""
-    data = _call("GET", f"{base_url}/psd2/v2/accounts",
-                 headers=_headers(consent_id))
+    data = _call("GET", f"{base_url}/hydrogen/v1/accounts",
+                 headers=_headers(base_url, consent_id))
     return data.get("accounts", [])
 
 
 def get_balances(base_url: str, consent_id: str, account_id: str) -> list:
     """All balance types the bank reports for this account
     (closingBooked, expected, interimAvailable, ...)."""
-    data = _call("GET", f"{base_url}/psd2/v2/accounts/{account_id}/balances",
-                 headers=_headers(consent_id))
+    data = _call("GET", f"{base_url}/hydrogen/v1/accounts/{account_id}/balances",
+                 headers=_headers(base_url, consent_id))
     return data.get("balances", [])
 
 
@@ -143,8 +170,8 @@ def get_transactions(base_url: str, consent_id: str, account_id: str) -> dict:
     can handle them uniformly.
     """
     date_from = (datetime.today() - timedelta(days=_TXN_LOOKBACK_DAYS)).strftime("%Y-%m-%d")
-    data = _call("GET", f"{base_url}/psd2/v2/accounts/{account_id}/transactions",
-                 headers=_headers(consent_id),
+    data = _call("GET", f"{base_url}/hydrogen/v1/accounts/{account_id}/transactions",
+                 headers=_headers(base_url, consent_id),
                  params={"dateFrom": date_from, "bookingStatus": "both"})
     transactions = data.get("transactions", {})
     return {

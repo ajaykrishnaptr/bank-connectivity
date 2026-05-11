@@ -264,20 +264,22 @@ def main() -> None:
                        critical=False)
         .add_extension(x509.AuthorityKeyIdentifier.from_issuer_public_key(inter_key.public_key()),
                        critical=False)
+        # Both URIs are plain http:// — F5 BIG-IP gateways (UniCredit's
+        # included) refuse https:// for revocation endpoints.
         .add_extension(x509.AuthorityInformationAccess([
             x509.AccessDescription(
                 x509.AuthorityInformationAccessOID.OCSP,
-                x509.UniformResourceIdentifier("http://ocsp.testAK-tpp.unicredit.eu"),
+                x509.UniformResourceIdentifier("http://ocsp.fintnet.ai"),
             ),
             x509.AccessDescription(
                 x509.AuthorityInformationAccessOID.CA_ISSUERS,
-                x509.UniformResourceIdentifier("http://ca.testAK-tpp.unicredit.eu/inter.crt"),
+                x509.UniformResourceIdentifier("http://crl.fintnet.ai/inter.crt"),
             ),
         ]), critical=False)
         .add_extension(x509.CRLDistributionPoints([
             x509.DistributionPoint(
                 full_name=[x509.UniformResourceIdentifier(
-                    "https://ajaykrishnaptr.github.io/pki-crl/crl.crl")],
+                    "http://crl.fintnet.ai/crl.crl")],
                 relative_name=None,
                 reasons=None,
                 crl_issuer=None,
@@ -312,11 +314,37 @@ def main() -> None:
         f.write(crl.public_bytes(serialization.Encoding.DER))
     print(f"  Written: {crl_path}")
 
+
+    # ── 5. OCSP responder index.txt ──────────────────────────────────────────
+    # Our OCSP responder (openssl ocsp -port) consults an index.txt to decide
+    # whether a serial is V (valid), R (revoked), or unknown. We mark our
+    # leaf as V; the file gets pushed to the responder VM after each re-issue.
+    print("\n[5/5] Writing OCSP index.txt for the new leaf...")
+    write_ocsp_index(ee_cert, CERTS_DIR / "ocsp_index.txt")
+
     print("\nDone. Summary:")
     print("  Submit to UniCredit: certs/chain.crt (trust chain)")
     print("  Use in .env:         CERT_PATH=certs/eIDAS_test.crt")
     print("                       KEY_PATH=certs/eIDAS_test.key")
-    print("  CRL hosted at:       https://ajaykrishnaptr.github.io/pki-crl/crl.crl")
+    print("  OCSP / CRL served from VM at fintnet.ai (push ocsp_index.txt + crl.crl + inter.crt)")
+
+
+def write_ocsp_index(ee_cert: x509.Certificate, path: Path) -> None:
+    """Write a one-line openssl `index.txt` entry marking `ee_cert` as V (valid).
+
+    Format (tab-separated): status, expiry (YYMMDDHHMMSSZ), revocation date,
+    serial (uppercase hex), filename, subject DN.
+    """
+    serial   = format(ee_cert.serial_number, "X")
+    not_after = ee_cert.not_valid_after.strftime("%y%m%d%H%M%SZ")
+    # openssl one-line subject runs least- to most-specific (C first, CN last);
+    # cryptography iterates the opposite way, so reverse it.
+    subj = "/" + "/".join(
+        f"{a.rfc4514_attribute_name}={a.value}" for a in reversed(list(ee_cert.subject))
+    )
+    line = f"V\t{not_after}\t\t{serial}\tunknown\t{subj}\n"
+    path.write_text(line)
+    print(f"  Written: {path}")
 
 
 if __name__ == "__main__":
