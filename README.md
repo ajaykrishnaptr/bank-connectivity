@@ -1,6 +1,6 @@
 # FintNet — Financial Institutions Integration Network
 
-Connect European bank accounts in one place. FintNet fetches accounts, balances, and transactions via secure bank APIs and presents a unified view — including cross-border, multi-currency consolidation, and **on-device transaction categorisation powered by a local LLM (Ollama + Qwen 2.5 3B)** — no cloud calls, no API costs, transaction data never leaves the machine.
+Connect European bank accounts in one place. FintNet fetches accounts, balances, and transactions via secure bank APIs and presents a unified view — including cross-border, multi-currency consolidation, and **on-device transaction categorisation powered by a local LLM (Ollama + Qwen 2.5 3B)** — so no cloud-LLM calls, no per-call AI costs, and transaction data never leaves the machine for categorisation.
 
 ---
 
