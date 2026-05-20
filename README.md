@@ -37,7 +37,7 @@ Connect European bank accounts in one place. FintNet fetches accounts, balances,
 |------|---------|------|--------|
 | Nordea | Finland, Sweden, Norway, Denmark | OAuth2 authorization_code + SCA | Ready |
 | Commerzbank | Germany | OAuth2 client_credentials + consent | Ready — no redirect needed |
-| UniCredit | Italy | mTLS + PSD2 consent SCA | Requires sandbox onboarding |
+| UniCredit | Italy | mTLS + PSD2 consent SCA | Ready (sandbox) |
 | Deutsche Bank | Germany | OAuth2 + Berlin Group consent + SCA redirect | Client built, awaiting credentials |
 | ING | Netherlands, Belgium, Germany | mTLS + HTTP Signatures + OAuth2 authorization_code | Working with sandbox example client |
 
@@ -69,6 +69,7 @@ So a vanilla self-signed eIDAS chain isn't enough. The leaf has to point at OCSP
   - A ~50-line Python proxy (stdlib only) listens on port 80, serves `/crl.crl` + `/inter.crt` static, and forwards every other request to the openssl backend.
   - Both as systemd services. Two A records (`crl`, `ocsp`) at GoDaddy point at the VM.
 - After every leaf re-issue, `generate_psd2_cert.py` also writes `certs/ocsp_index.txt` — the new serial gets a `V` (valid) line that's pushed to the responder so OCSP returns "good" for it.
+- CRL housekeeping is split into two scripts: `refresh_crl.py` re-signs an empty CRL with the intermediate (the `nextUpdate` field is 30 days out, so this is run monthly); `deploy_crl.sh` scps the fresh CRL up to the Oracle VM and restarts the proxy.
 
 The bank still has to import `chain.crt` once into its trust store; subsequent leaf re-issues under the same intermediate don't need re-trust.
 
