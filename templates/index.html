@@ -201,6 +201,24 @@
 {% endif %}
 
 
+{% if is_demo %}
+<!-- ── Demo disclaimer: live connect needs sandbox creds absent on Vercel ── -->
+<div style="display:flex;align-items:flex-start;gap:.75rem;
+  background:linear-gradient(135deg,rgba(245,158,11,.12),rgba(245,158,11,.04));
+  border:1px solid rgba(245,158,11,.35);border-radius:14px;
+  padding:1rem 1.25rem;margin-bottom:1.5rem">
+  <span style="font-size:1.15rem;line-height:1.3;flex-shrink:0">⚠️</span>
+  <div style="font-size:.8125rem;line-height:1.6;color:var(--text-2)">
+    <strong style="color:var(--text)">Demo mode — connecting a live bank is disabled here.</strong>
+    The bank integrations below run only against each bank's <strong>PSD2 sandbox</strong>,
+    which requires mTLS client certificates and sandbox credentials that aren't deployed to
+    this public Vercel host. The dashboards you see are populated with realistic
+    <strong>seeded demo data</strong>. To exercise the real connect flows, run FintNet locally
+    with the sandbox certs in <code>.env</code> — see the README.
+  </div>
+</div>
+{% endif %}
+
 <!-- ── Bank integrations header ──────────────────────────────────────────── -->
 <div style="display:flex;align-items:center;gap:1rem;margin-bottom:1.25rem">
   <div style="font-size:.6875rem;font-weight:700;text-transform:uppercase;letter-spacing:.1em;color:var(--text-3);white-space:nowrap">

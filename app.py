@@ -457,6 +457,18 @@ def load_user(user_id):
     return User.query.get(int(user_id))
 
 
+# True on the hosted demo (Vercel), where live bank connect flows can't
+# run — there are no sandbox certs/credentials in the serverless env.
+# Templates use this to show a "demo only" disclaimer. Exposed to every
+# template so any page can read `is_demo` without threading it through.
+IS_DEMO = bool(os.getenv("VERCEL"))
+
+
+@app.context_processor
+def inject_is_demo():
+    return {"is_demo": IS_DEMO}
+
+
 # ── One-shot schema init + migration (runs at import time) ───────────────────
 # This deliberately runs at import time so a fresh checkout's first
 # request has a working DB. The ALTER TABLE is a hand-rolled migration
