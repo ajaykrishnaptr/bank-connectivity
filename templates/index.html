@@ -86,6 +86,30 @@
     </p>
 
     {% if active_conns > 0 %}
+
+    {% if potential_savings and potential_savings > 0 %}
+    <!-- ── North Star: money you could save this month ──────────────────── -->
+    <a href="{{ url_for('recurring') }}" class="stat-num" style="
+      display:flex;align-items:center;gap:1.125rem;text-decoration:none;
+      background:linear-gradient(135deg,rgba(52,211,153,.14),rgba(16,185,129,.06));
+      border:1px solid rgba(52,211,153,.35);border-radius:16px;
+      padding:1.125rem 1.5rem;margin-bottom:2rem;max-width:540px;
+      box-shadow:0 8px 28px rgba(16,185,129,.18);transition:transform .2s,box-shadow .2s"
+      onmouseover="this.style.transform='translateY(-2px)';this.style.boxShadow='0 12px 34px rgba(16,185,129,.28)'"
+      onmouseout="this.style.transform='translateY(0)';this.style.boxShadow='0 8px 28px rgba(16,185,129,.18)'">
+      <span style="font-size:1.75rem;line-height:1;flex-shrink:0">💸</span>
+      <div style="flex:1;min-width:0">
+        <div style="font-size:.7rem;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:#6ee7b7;opacity:.9">
+          FintNet has found
+        </div>
+        <div style="font-size:1.875rem;font-weight:900;letter-spacing:-.04em;line-height:1.15;color:#fff">
+          €{{ '%.0f'|format(potential_savings) }}<span style="font-size:1.0625rem;font-weight:700;opacity:.65">/month</span>
+        </div>
+        <div style="font-size:.78rem;opacity:.7;margin-top:.1rem">you could potentially save &mdash; review the details →</div>
+      </div>
+    </a>
+    {% endif %}
+
     <div style="display:flex;align-items:center;gap:2.5rem;flex-wrap:wrap">
       {% for val, label, color in [
         (active_conns,   'Banks connected',   '#a5b4fc'),
@@ -176,22 +200,6 @@
 </div>
 {% endif %}
 
-<!-- ── How it works ──────────────────────────────────────────────────────── -->
-<div class="grid grid-3" style="margin-bottom:1.75rem">
-  {% for icon, title, desc, color, bg in [
-    ('🔐', 'Your password stays private',  'You log in directly at your own bank — FintNet never sees your credentials. Safe by design.',  '#6366f1', '#eef2ff'),
-    ('⚡',  'Updates automatically',        'The moment you connect, your accounts and transactions sync instantly. No manual refreshing.',  '#10b981', '#f0fdf4'),
-    ('📊',  'Understand your money',        'See where you spend, spot recurring bills, and track your total balance across all accounts.',  '#f59e0b', '#fffbeb'),
-  ] %}
-  <div class="feature-card">
-    <div class="feature-icon" style="background:{{ bg }};color:{{ color }}">{{ icon }}</div>
-    <div>
-      <div style="font-size:.875rem;font-weight:700;color:var(--text);margin-bottom:.3rem">{{ title }}</div>
-      <div style="font-size:.78rem;color:var(--text-3);line-height:1.6">{{ desc }}</div>
-    </div>
-  </div>
-  {% endfor %}
-</div>
 
 <!-- ── Bank integrations header ──────────────────────────────────────────── -->
 <div style="display:flex;align-items:center;gap:1rem;margin-bottom:1.25rem">
@@ -312,8 +320,25 @@
 {% endfor %}
 </div>
 
+<!-- ── Reassurance banner (slim, above footer) ───────────────────────────── -->
+<div style="margin-top:2rem;display:flex;flex-wrap:wrap;gap:1.5rem;justify-content:space-between;padding:1rem 1.25rem;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius)">
+  {% for icon, title, desc in [
+    ('🔐', 'Your password stays private', 'You log in directly at your own bank — FintNet never sees your credentials.'),
+    ('⚡',  'Updates automatically',       'Accounts and transactions sync the moment you connect. No manual refreshing.'),
+    ('📊',  'Understand your money',       'See where you spend, spot recurring bills, and track your total balance.'),
+  ] %}
+  <div style="flex:1;min-width:200px;display:flex;align-items:flex-start;gap:.625rem">
+    <span style="font-size:1rem;line-height:1.2;flex-shrink:0">{{ icon }}</span>
+    <div>
+      <div style="font-size:.75rem;font-weight:600;color:var(--text-2);margin-bottom:.15rem">{{ title }}</div>
+      <div style="font-size:.7rem;color:var(--text-3);line-height:1.5">{{ desc }}</div>
+    </div>
+  </div>
+  {% endfor %}
+</div>
+
 <!-- ── Footer note ───────────────────────────────────────────────────────── -->
-<div style="margin-top:2rem;text-align:center;padding:1.25rem;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);box-shadow:var(--shadow)">
+<div style="margin-top:1rem;text-align:center;padding:1.25rem;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);box-shadow:var(--shadow)">
   <div style="font-size:.75rem;color:var(--text-3);line-height:1.7">
     <span style="font-weight:600;color:var(--text-2)">FintNet</span> connects to your banks using the same security standards your bank does.
     Your login credentials are <strong style="color:var(--text-2)">never stored or shared</strong> &mdash;

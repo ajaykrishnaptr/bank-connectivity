@@ -393,6 +393,38 @@ def _detect_waste(fixed, all_recurring, income, all_txns):
     return signals
 
 
+def _total_potential_savings(signals):
+    """Roll the waste signals into one number — "money you could save
+    per month" — FintNet's North Star metric.
+
+    Deliberately conservative so the headline figure is defensible:
+      * redundant  → cancel all but the single most-expensive sub
+      * price_creep → only the amount the price has crept up
+      * lapse       → the full monthly cost of the likely-unused sub
+      * burden      → excluded; it's a ratio, not a recoverable amount
+
+    Amounts are summed as EUR-equivalent (the demo/seed data is EUR);
+    a multi-currency build would convert via currency_utils first.
+
+    Returns (total, breakdown) where breakdown maps signal type → € saved.
+    """
+    breakdown: dict[str, float] = defaultdict(float)
+    for s in signals:
+        t = s.get("type")
+        if t == "redundant":
+            amounts = [svc["avg_amount"] for svc in s.get("services", [])]
+            if len(amounts) >= 2:
+                # Keep the priciest, cancel the rest.
+                breakdown["redundant"] += sum(amounts) - max(amounts)
+        elif t == "price_creep":
+            crept = (s.get("recent_avg", 0) or 0) - (s.get("early_avg", 0) or 0)
+            breakdown["price_creep"] += max(0.0, crept)
+        elif t == "lapse":
+            breakdown["lapse"] += s.get("subscription_monthly", 0) or 0
+    total = round(sum(breakdown.values()), 2)
+    return total, {k: round(v, 2) for k, v in breakdown.items()}
+
+
 # ── Flask app + DB + login setup ─────────────────────────────────────────────
 # Each per-bank redirect URI is a distinct route because the OAuth /
 # consent flows can't all reuse the same endpoint — they post different
@@ -584,6 +616,8 @@ def index():
     # Skip the analytics work for empty accounts — _detect_recurring is
     # cheap but pointless when there's nothing to analyse.
     waste = []
+    potential_savings = 0.0
+    savings_breakdown: dict[str, float] = {}
     if active_conns > 0 and txn_count > 0:
         expenses, income, all_txns = _detect_recurring()
         fixed       = [r for r in expenses if r["is_fixed"]]
@@ -591,6 +625,10 @@ def index():
         dismissed   = {d.alert_key for d in
                        DismissedAlert.query.filter_by(user_id=current_user.id).all()}
         waste = [s for s in all_signals if s.get("key") not in dismissed]
+        # North Star: compute from the *un-dismissed* signals so the
+        # headline number always matches the alert cards on the page
+        # (and shrinks the moment a user dismisses one).
+        potential_savings, savings_breakdown = _total_potential_savings(waste)
 
     return render_template("index.html",
         connections=connections,
@@ -598,6 +636,8 @@ def index():
         account_count=account_count,
         txn_count=txn_count,
         waste=waste,
+        potential_savings=potential_savings,
+        savings_breakdown=savings_breakdown,
     )
 
 
