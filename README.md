@@ -2,6 +2,8 @@
 
 Connect European bank accounts in one place. FintNet fetches accounts, balances, and transactions via secure bank APIs and presents a unified view — including cross-border, multi-currency consolidation, and **on-device transaction categorisation powered by a local LLM (Ollama + Qwen 2.5 3B)** — so no cloud-LLM calls, no per-call AI costs, and transaction data never leaves the machine for categorisation.
 
+**Live demo → https://bank-connectivity.vercel.app**
+
 ---
 
 ## Architecture
@@ -175,7 +177,9 @@ Tools deliberately return *small scalar summaries* (`{count, inflow, outflow, ne
 python3 app.py
 ```
 
-Visit: https://127.0.0.1:5000 (the dev server uses an adhoc self-signed cert, so accept the browser warning).
+**Live demo (no setup):** https://bank-connectivity.vercel.app
+
+Or run it locally and visit https://127.0.0.1:5000 (the dev server uses an adhoc self-signed cert, so accept the browser warning).
 
 The login page lists every demo persona under **"Try a demo account"** — click one to auto-fill the email and the shared password, then sign in. No need to look up credentials.
 
