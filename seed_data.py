@@ -1,6 +1,6 @@
 """
-Seed script — populates the local SQLite DB with three test users
-across multiple banks, each with 6 months of synthetic transactions.
+Seed script — populates the local SQLite DB with one demo user per
+connected bank, each with 6 months of synthetic transactions.
 
 Re-runnable: every existing row for the seeded users is deleted first
 so you always end up with a clean snapshot. The RNG is seeded with a
@@ -42,76 +42,113 @@ PASSWORD = "TestPass123"
 # flow, not here.
 #
 # Optional bank-level fields:
-#   currency: ISO 4217 — used for foreign-currency accounts (Arjun's SEK).
+#   currency: ISO 4217 — used for foreign-currency accounts (Sven's SEK).
 #   fx:       multiplier applied to the seeded EUR amounts to produce
 #             native-currency figures, so 100 EUR rent at fx=11.2 =>
 #             1120 SEK. Salary is exempt — see `generate_current`.
+#
+# The personas below are deliberately the "John Doe" placeholder names
+# each country's banking sandboxes use (Max Mustermann for Germany,
+# Mario Rossi for Italy, Jan Jansen for the Netherlands, etc.), so the
+# demo reads like sandbox data rather than anyone's real accounts.
+# There is one persona per connected bank, with two for Nordea (a
+# Finnish EUR customer and a Swedish SEK customer) to show the
+# multi-currency aggregation. The login page lists every email + the
+# shared password below, so keep DEMO_LOGIN in app.py in sync.
 
 USERS = [
     {
-        "email":      "priya.sharma@testbank.eu",
-        "owner_name": "Priya Sharma",
-        "salary":     ("Siemens AG",        3900, 4500),
+        # Germany — Commerzbank + Deutsche Bank.
+        "email":      "max.mustermann@example.de",
+        "owner_name": "Max Mustermann",
+        "salary":     ("SAP SE",            3900, 4500),
         "banks": {
-            "nordea": {
-                "access_token": "seeded-nordea-priya",
-                "accounts": [
-                    {"resource_id": "N-PRIYA-CUR", "iban": "FI4350001520660004",
-                     "name": "Current Account", "currency": "EUR"},
-                    {"resource_id": "N-PRIYA-SAV", "iban": "FI2112345600000785",
-                     "name": "Savings Account",  "currency": "EUR"},
-                ],
-            },
             "commerzbank": {
-                "consent_id": "seeded-cb-priya",
+                "consent_id": "seeded-cb-max",
                 "accounts": [
-                    {"resource_id": "CB-PRIYA-CUR", "iban": "DE89370400440532013000",
+                    {"resource_id": "CB-MAX-CUR", "iban": "DE89370400440532013000",
                      "name": "Girokonto", "currency": "EUR"},
-                    {"resource_id": "CB-PRIYA-SAV", "iban": "DE27100777770209299700",
+                    {"resource_id": "CB-MAX-SAV", "iban": "DE27100777770209299700",
                      "name": "Sparkonto", "currency": "EUR"},
                 ],
             },
-            "ing": {
-                "access_token": "seeded-ing-priya",
+            "deutschebank": {
+                "consent_id": "seeded-db-max",
                 "accounts": [
-                    {"resource_id": "ING-PRIYA-CUR", "iban": "NL91INGB0002445588",
-                     "name": "Betaalrekening", "currency": "EUR"},
-                    {"resource_id": "ING-PRIYA-SAV", "iban": "NL18INGB0009876541",
-                     "name": "Oranje Spaarrekening", "currency": "EUR"},
+                    {"resource_id": "DB-MAX-CUR", "iban": "DE75512108001245126199",
+                     "name": "Girokonto", "currency": "EUR"},
+                    {"resource_id": "DB-MAX-SAV", "iban": "DE02300606010002474689",
+                     "name": "Tagesgeld", "currency": "EUR"},
                 ],
             },
         },
     },
     {
-        "email":      "arjun.mehta@testbank.eu",
-        "owner_name": "Arjun Mehta",
-        "salary":     ("SAP SE",            38000, 44000),   # Arjun is paid in SEK.
+        # Finland — Nordea (EUR).
+        "email":      "anna.korhonen@example.fi",
+        "owner_name": "Anna Korhonen",
+        "salary":     ("Nokia Oyj",         3700, 4300),
         "banks": {
             "nordea": {
-                "access_token": "seeded-nordea-arjun",
+                "access_token": "seeded-nordea-anna",
+                "accounts": [
+                    {"resource_id": "N-ANNA-CUR", "iban": "FI4350001520660004",
+                     "name": "Käyttötili", "currency": "EUR"},
+                    {"resource_id": "N-ANNA-SAV", "iban": "FI2112345600000785",
+                     "name": "Säästötili",  "currency": "EUR"},
+                ],
+            },
+        },
+    },
+    {
+        # Sweden — Nordea (paid in SEK).
+        "email":      "sven.andersson@example.se",
+        "owner_name": "Sven Andersson",
+        "salary":     ("Volvo Group",       38000, 44000),   # Sven is paid in SEK.
+        "banks": {
+            "nordea": {
+                "access_token": "seeded-nordea-sven",
                 "currency": "SEK",
                 "fx": 11.2,   # rough EUR -> SEK rate at seed time
                 "accounts": [
-                    {"resource_id": "N-ARJUN-CUR", "iban": "SE3550000000054910000003",
+                    {"resource_id": "N-SVEN-CUR", "iban": "SE3550000000054910000003",
                      "name": "Lönekonto", "currency": "SEK"},
-                    {"resource_id": "N-ARJUN-SAV", "iban": "SE6780000810340967640001",
+                    {"resource_id": "N-SVEN-SAV", "iban": "SE6780000810340967640001",
                      "name": "Sparkonto",  "currency": "SEK"},
                 ],
             },
         },
     },
     {
-        "email":      "kavya.reddy@testbank.eu",
-        "owner_name": "Kavya Reddy",
-        "salary":     ("Deutsche Bank AG",  4100, 4700),
+        # Netherlands — ING.
+        "email":      "jan.jansen@example.nl",
+        "owner_name": "Jan Jansen",
+        "salary":     ("Philips NV",        3800, 4400),
         "banks": {
-            "commerzbank": {
-                "consent_id": "seeded-cb-kavya",
+            "ing": {
+                "access_token": "seeded-ing-jan",
                 "accounts": [
-                    {"resource_id": "CB-KAVYA-CUR", "iban": "DE75512108001245126199",
-                     "name": "Girokonto", "currency": "EUR"},
-                    {"resource_id": "CB-KAVYA-SAV", "iban": "DE02300606010002474689",
-                     "name": "Sparkonto", "currency": "EUR"},
+                    {"resource_id": "ING-JAN-CUR", "iban": "NL91INGB0002445588",
+                     "name": "Betaalrekening", "currency": "EUR"},
+                    {"resource_id": "ING-JAN-SAV", "iban": "NL18INGB0009876541",
+                     "name": "Oranje Spaarrekening", "currency": "EUR"},
+                ],
+            },
+        },
+    },
+    {
+        # Italy — UniCredit.
+        "email":      "mario.rossi@example.it",
+        "owner_name": "Mario Rossi",
+        "salary":     ("Enel SpA",          3600, 4200),
+        "banks": {
+            "unicredit": {
+                "consent_id": "seeded-uc-mario",
+                "accounts": [
+                    {"resource_id": "UC-MARIO-CUR", "iban": "IT60X0542811101000000123456",
+                     "name": "Conto Corrente", "currency": "EUR"},
+                    {"resource_id": "UC-MARIO-SAV", "iban": "IT75A0300203280123456789012",
+                     "name": "Conto Deposito", "currency": "EUR"},
                 ],
             },
         },

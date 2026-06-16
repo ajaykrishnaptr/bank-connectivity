@@ -1,0 +1,14 @@
+# Keep the serverless bundle small — exclude local-only and heavy files.
+.venv/
+certs/
+logs/
+instance/
+docs/
+__pycache__/
+*.pyc
+*.db
+*.png
+*.pdf
+*.docx
+.git/
+.claude/
