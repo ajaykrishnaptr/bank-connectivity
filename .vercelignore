@@ -1,4 +1,9 @@
 # Keep the serverless bundle small — exclude local-only and heavy files.
+# NEVER bundle local env files: they hold real sandbox secrets and would
+# override the serverless config (e.g. DATABASE_URL) at runtime. Vercel
+# env vars are the source of truth for the deploy.
+.env
+.env.*
 .venv/
 certs/
 logs/
