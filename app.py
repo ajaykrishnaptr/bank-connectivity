@@ -438,7 +438,12 @@ app.config["CB_REDIRECT_URI"]         = os.getenv("CB_REDIRECT_URI",     "http:/
 app.config["NORDEA_REDIRECT_URI"]     = os.getenv("NORDEA_REDIRECT_URI", "http://localhost:5000/nordea/callback")
 app.config["DB_REDIRECT_URI"]         = os.getenv("DB_REDIRECT_URI",     "http://localhost:5000/deutschebank/callback")
 app.config["ING_REDIRECT_URI"]        = os.getenv("ING_REDIRECT_URI",    "http://localhost:5000/ing/callback")
-app.config["SQLALCHEMY_DATABASE_URI"] = os.getenv("DATABASE_URL",        "sqlite:///ais.db")
+# On Vercel (and other serverless hosts) the project directory is
+# read-only — only /tmp is writable — so the SQLite file has to live
+# there. Locally we keep the default instance-folder DB. DATABASE_URL
+# overrides both.
+_default_db = "sqlite:////tmp/ais.db" if os.getenv("VERCEL") else "sqlite:///ais.db"
+app.config["SQLALCHEMY_DATABASE_URI"] = os.getenv("DATABASE_URL",        _default_db)
 app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
 
 db.init_app(app)
@@ -476,6 +481,19 @@ with app.app_context():
         t.category = cat.categorize(t.creditor_name or t.debtor_name or "")
     if uncategorized:
         db.session.commit()
+
+    # Empty DB? Populate the demo personas so a fresh checkout — or a
+    # serverless cold start on Vercel, where /tmp begins empty — has
+    # something to show without anyone running `seed_data.py` by hand.
+    # `seed_data` is imported lazily here (not at the top of this file)
+    # because it does `from app import app`, which only resolves once
+    # `app` exists. The seed is deterministic and idempotent.
+    if User.query.count() == 0:
+        try:
+            import seed_data
+            seed_data.main()
+        except Exception as exc:  # never let seeding crash app startup
+            log.warning("seed.failed", extra={"event": "seed.failed", "error": str(exc)})
 
 
 # ── DB-scoping helpers ───────────────────────────────────────────────────────
@@ -676,6 +694,20 @@ def disconnect(bank):
 
 # ── Auth ─────────────────────────────────────────────────────────────────────
 
+# Demo personas surfaced on the login page so anyone trying the hosted
+# app can sign in with one click instead of hunting for credentials.
+# Emails and the shared password must match what `seed_data.py` creates;
+# `banks` is just a human-readable label for the card.
+DEMO_PASSWORD = "TestPass123"
+DEMO_LOGIN = [
+    {"name": "Max Mustermann",  "email": "max.mustermann@example.de",   "banks": "Commerzbank · Deutsche Bank"},
+    {"name": "Anna Korhonen",   "email": "anna.korhonen@example.fi",    "banks": "Nordea (EUR)"},
+    {"name": "Sven Andersson",  "email": "sven.andersson@example.se",   "banks": "Nordea (SEK)"},
+    {"name": "Jan Jansen",      "email": "jan.jansen@example.nl",       "banks": "ING"},
+    {"name": "Mario Rossi",     "email": "mario.rossi@example.it",      "banks": "UniCredit"},
+]
+
+
 @app.route("/login", methods=["GET", "POST"])
 def login():
     """Email + password sign-in. Honours `?next=` so flask-login can
@@ -694,7 +726,8 @@ def login():
         # Don't tell the attacker which half was wrong.
         log.warning("auth.login.failed", extra={"event": "auth.login.failed", "email": email})
         flash("Invalid email or password.", "error")
-    return render_template("login.html")
+    return render_template("login.html",
+                           demo_users=DEMO_LOGIN, demo_password=DEMO_PASSWORD)
 
 
 @app.route("/signup", methods=["GET", "POST"])

@@ -175,7 +175,31 @@ Tools deliberately return *small scalar summaries* (`{count, inflow, outflow, ne
 python3 app.py
 ```
 
-Visit: http://127.0.0.1:5000
+Visit: https://127.0.0.1:5000 (the dev server uses an adhoc self-signed cert, so accept the browser warning).
+
+The login page lists every demo persona under **"Try a demo account"** — click one to auto-fill the email and the shared password, then sign in. No need to look up credentials.
+
+If the database is empty (a fresh checkout, or a serverless cold start), the app **auto-seeds** the demo personas on first request, so `python3 seed_data.py` is only needed when you want to wipe and re-seed manually.
+
+---
+
+## Deploying to Vercel
+
+The repo ships a `vercel.json`, an `api/index.py` WSGI entry point, and a `.vercelignore`, so a read-only demo deploys with no extra config:
+
+```bash
+vercel        # preview deploy
+vercel --prod # production deploy
+```
+
+How it works on serverless:
+- `api/index.py` re-exports the Flask `app`; `vercel.json` routes all traffic to it and bundles `templates/`.
+- Vercel's filesystem is read-only except `/tmp`, so when `VERCEL=1` is set the SQLite DB lives at `/tmp/ais.db` and **auto-seeds on each cold start** — the demo always has data without a build step.
+- `USE_AI_CATEGORIZER=false` is set in `vercel.json` (no Ollama on serverless); seeded transactions are pre-categorised, so the dashboards render fully.
+
+Optional: set `FLASK_SECRET_KEY` in the Vercel dashboard so login sessions survive redeploys.
+
+> **Scope:** this is a self-contained **read-only demo**. Live bank connectivity (mTLS client certs, bank-registered redirect URIs, a persistent Postgres instead of `/tmp` SQLite) is intentionally out of scope for the Vercel deploy.
 
 ---
 
@@ -202,7 +226,7 @@ Every event is a single-line JSON object with `ts`, `level`, `logger`, `event`, 
 
 ## Seeding test data
 
-Populates the DB with 3 test users, bank connections, accounts, and ~6 months of transactions. Safe to re-run — clears and recreates test data each time.
+Populates the DB with one demo persona per connected bank, plus bank connections, accounts, and ~6 months of transactions. Safe to re-run — clears and recreates test data each time. (The app also auto-seeds an empty database on first request, so this is only needed for a manual re-seed.)
 
 ```bash
 python3 seed_data.py
@@ -212,19 +236,27 @@ python3 seed_data.py
 
 ## Test accounts
 
-All accounts use password: **`TestPass123`**
+All accounts use password: **`TestPass123`** — and the login page lists them as one-click "Try a demo account" chips.
+
+Each persona uses the placeholder name that the relevant country's banking sandboxes use (Max Mustermann for Germany, Mario Rossi for Italy, Jan Jansen for the Netherlands, etc.), so the demo reads like sandbox data. There is one persona per connected bank, with two for Nordea to show multi-currency aggregation.
 
 | Name | Email | Banks | Currency |
 |------|-------|-------|----------|
-| Priya Sharma | `priya.sharma@testbank.eu` | Nordea FI + Commerzbank DE + ING NL | EUR |
-| Arjun Mehta | `arjun.mehta@testbank.eu` | Nordea SE | SEK |
-| Kavya Reddy | `kavya.reddy@testbank.eu` | Commerzbank DE | EUR |
+| Max Mustermann | `max.mustermann@example.de` | Commerzbank DE + Deutsche Bank DE | EUR |
+| Anna Korhonen | `anna.korhonen@example.fi` | Nordea FI | EUR |
+| Sven Andersson | `sven.andersson@example.se` | Nordea SE | SEK |
+| Jan Jansen | `jan.jansen@example.nl` | ING NL | EUR |
+| Mario Rossi | `mario.rossi@example.it` | UniCredit IT | EUR |
 
-**Priya Sharma** — 6 accounts across three banks (2 Nordea Finland, 2 Commerzbank Germany, 2 ING Netherlands), salary from Siemens AG ~€4,200/mo. Best demo for multi-bank, multi-country aggregation.
+**Max Mustermann** — 4 German accounts across two banks (2 Commerzbank `Girokonto`/`Sparkonto`, 2 Deutsche Bank `Girokonto`/`Tagesgeld`), salary from SAP SE ~€4,200/mo. Best demo for multi-bank consolidation within one country.
 
-**Arjun Mehta** — 2 Swedish Nordea accounts (`Lönekonto` + `Sparkonto`) in SEK, salary from SAP SE ~38,000–44,000 SEK/mo. Best demo for cross-border currency conversion.
+**Anna Korhonen** — 2 Finnish Nordea accounts (`Käyttötili` + `Säästötili`), salary from Nokia Oyj ~€4,000/mo.
 
-**Kavya Reddy** — 2 Commerzbank Germany accounts, salary from Deutsche Bank AG ~€4,400/mo.
+**Sven Andersson** — 2 Swedish Nordea accounts (`Lönekonto` + `Sparkonto`) in SEK, salary from Volvo Group ~38,000–44,000 SEK/mo. Best demo for cross-border currency conversion.
+
+**Jan Jansen** — 2 Dutch ING accounts (`Betaalrekening` + `Oranje Spaarrekening`), salary from Philips NV ~€4,100/mo.
+
+**Mario Rossi** — 2 Italian UniCredit accounts (`Conto Corrente` + `Conto Deposito`), salary from Enel SpA ~€3,900/mo.
 
 Each current account includes:
 - Monthly salary credit (1st–5th of month)
@@ -263,7 +295,7 @@ The local-LLM categoriser is shipped (above). Two further AI capabilities are ne
 
 ### MCP server exposing FintNet's data
 
-Wrap accounts, transactions, balances, and the recurring/waste detection as MCP tools and resources, so Claude Desktop or Code can answer questions like *"what did Priya spend on groceries last month?"* against the live SQLite. Touches tool definitions, resource schemas, and the JSON-RPC handshake — the actual MCP protocol, not a framework abstraction.
+Wrap accounts, transactions, balances, and the recurring/waste detection as MCP tools and resources, so Claude Desktop or Code can answer questions like *"what did Max spend on groceries last month?"* against the live SQLite. Touches tool definitions, resource schemas, and the JSON-RPC handshake — the actual MCP protocol, not a framework abstraction.
 
 *Stretch:* a second MCP server that wraps Splunk to let Claude query `logs/fintnet.json` events.
 
