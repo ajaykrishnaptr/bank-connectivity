@@ -31,6 +31,7 @@ Identity threading:
   * A `Consent-ID` header is added once we have one.
 """
 import os
+import logging
 import uuid
 from datetime import datetime, timedelta
 
@@ -104,7 +105,20 @@ def _call(method: str, url: str, **kwargs):
         resp = requests.request(method, url, cert=CERT,
                                 timeout=_DEFAULT_HTTP_TIMEOUT, **kwargs)
         resp.raise_for_status()
-        return resp.json()
+        try:
+            return resp.json()
+        except ValueError:
+            # The gateway sometimes answers with an HTML page instead of JSON.
+            # Log what came back so the cause can be traced, and tell the user
+            # something readable instead of a JSON parser message.
+            logging.getLogger("fintnet").warning("unicredit.non_json_response", extra={
+                "event": "unicredit.non_json_response", "method": method, "url": url,
+                "status_code": resp.status_code, "final_url": resp.url,
+                "redirects": [f"{h.status_code} {h.headers.get('Location', '')}" for h in resp.history],
+                "content_type": resp.headers.get("Content-Type", ""), "body": resp.text[:300],
+            })
+            raise PSD2ApiError("UniCredit's sandbox sent back an unexpected page instead of data. "
+                               "Please try again in a moment.", status_code=resp.status_code)
     except requests.exceptions.SSLError as e:
         raise PSD2ApiError(f"SSL/certificate error: {e}")
     except requests.exceptions.HTTPError as e:
