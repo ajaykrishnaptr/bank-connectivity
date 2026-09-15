@@ -258,17 +258,42 @@ MONTHLY_RATE: dict[str, dict[str, float]] = {
                    "Entertainment": 1, "Healthcare": 1, "ATM / Cash": 1, "Transfers / Other": 3},
 }
 
-# The 5 demo logins: real bank sandbox identities, each also a synthetic
-# bank customer so the assistant has 13 months of data.
+# Currency conversion used when a generated amount (drawn in EUR) is booked
+# on an account in another currency.
+FX = {"EUR": 1.0, "SEK": 11.2}
+
+# The banks FintNet connects, with the country their generated IBANs use.
+BANK_COUNTRY = {"unicredit": "IT", "commerzbank": "DE", "ing": "NL"}   # nordea follows the customer (FI or SE)
+BANK_LABEL = {"unicredit": "UniCredit", "commerzbank": "Commerzbank", "nordea": "Nordea", "ing": "ING"}
+
+# The 5 demo logins. Each is the test user in one bank's PSD2 sandbox
+# (`home_bank`) and also holds generated accounts at one or more of the banks
+# FintNet connects (`accounts`: bank, role, currency). Roles decide which
+# transactions an account books:
+#   main     salary, rent, utilities, insurance, cash, transfers
+#   savings  the monthly savings transfer
+#   spend    subscriptions, gym, shopping, food delivery
+#   daily    dining, transport and half of the groceries
 DEMO_CUSTOMERS: list[dict] = [
     {"customer_id": "DEMO-DE-THOMASMANN", "name": "Thomas Mann", "country": "DE", "persona": "salaried",
-     "email": "thomas.mann@example.de", "employer": "SAP SE", "sandbox": "Commerzbank"},
+     "email": "thomas.mann@example.de", "employer": "SAP SE", "sandbox": "Commerzbank", "home_bank": "commerzbank",
+     "accounts": [("commerzbank", "main", "EUR"), ("commerzbank", "savings", "EUR"), ("ing", "spend", "EUR")]},
     {"customer_id": "DEMO-FI-AINOSALO", "name": "Aino Salo", "country": "FI", "persona": "salaried",
-     "email": "aino.salo@example.fi", "employer": "Nokia Oyj", "sandbox": "Nordea FI"},
+     "email": "aino.salo@example.fi", "employer": "Nokia Oyj", "sandbox": "Nordea FI", "home_bank": "nordea",
+     "accounts": [("nordea", "main", "EUR"), ("nordea", "savings", "EUR"), ("unicredit", "daily", "EUR")]},
     {"customer_id": "DEMO-SE-MARGITALROS", "name": "Margit Alros", "country": "SE", "persona": "family",
-     "email": "margit.alros@example.se", "employer": "Volvo Cars AB", "sandbox": "Nordea SE"},
+     "email": "margit.alros@example.se", "employer": "Volvo Cars AB", "sandbox": "Nordea SE", "home_bank": "nordea",
+     "accounts": [("nordea", "main", "SEK"), ("ing", "savings", "EUR"), ("commerzbank", "spend", "EUR"),
+                  ("unicredit", "daily", "EUR")]},
     {"customer_id": "DEMO-NL-VANDIJK", "name": "Hr A van Dijk, Mw B Mol-van Dijk", "country": "NL",
-     "persona": "family", "email": "a.vandijk@example.nl", "employer": "Philips Nederland BV", "sandbox": "ING NL"},
+     "persona": "family", "email": "a.vandijk@example.nl", "employer": "Philips Nederland BV", "sandbox": "ING NL",
+     "home_bank": "ing",
+     "accounts": [("ing", "main", "EUR"), ("ing", "savings", "EUR"), ("commerzbank", "spend", "EUR")]},
     {"customer_id": "DEMO-IT-MARIOROSSI", "name": "Mario Rossi", "country": "IT", "persona": "salaried",
-     "email": "mario.rossi@example.it", "employer": "Enel SpA", "sandbox": "UniCredit IT"},
+     "email": "mario.rossi@example.it", "employer": "Enel SpA", "sandbox": "UniCredit IT", "home_bank": "unicredit",
+     "accounts": [("unicredit", "main", "EUR"), ("unicredit", "savings", "EUR"), ("commerzbank", "spend", "EUR")]},
 ]
+
+
+def demo_customer(customer_id: str) -> dict | None:
+    return next((d for d in DEMO_CUSTOMERS if d["customer_id"] == customer_id), None)

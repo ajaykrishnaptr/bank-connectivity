@@ -59,7 +59,7 @@ TOOLS: list[dict] = [
      "input_schema": {"type": "object", "properties": {
          "date_from": {"type": "string", "description": "YYYY-MM-DD"},
          "date_to": {"type": "string", "description": "YYYY-MM-DD"},
-         "bank": {"type": "string", "description": "optional bank id, e.g. nordea, commerzbank, ing, unicredit, synthbank"}},
+         "bank": {"type": "string", "description": "optional bank id: unicredit, commerzbank, nordea or ing"}},
          "required": ["date_from", "date_to"], "additionalProperties": False}},
     {"name": "top_merchants",
      "description": "Merchants the user paid most between two dates, in EUR, optionally within one category.",
@@ -128,6 +128,7 @@ class Tools:
             native = sum(float(t.amount or 0) for t in acc.transactions)
             dates = [t.booking_date for t in acc.transactions if t.booking_date]
             out.append({"bank": acc.bank, "name": acc.name, "owner": acc.owner_name, "currency": acc.currency,
+                        "data": "generated" if (acc.resource_id or "").startswith("SB-") else "live sandbox",
                         "balance_native": round(native, 2),
                         "balance_eur": round(currency_utils.to_eur(native, acc.currency or "EUR", self.rates), 2),
                         "first_transaction": str(min(dates)) if dates else None,
@@ -256,7 +257,8 @@ def answer(question: str, user_id: int, recurring_fn: Callable[[], dict]) -> dic
                     "tools": [], "refused": False}
 
         tools = Tools(user_id, recurring_fn)
-        banks = sorted({c.bank for c in BankConnection.query.filter_by(user_id=user_id, status="active")})
+        # Generated-account connections are stored as gen_<bank>; the model sees the bank itself.
+        banks = sorted({c.bank.removeprefix("gen_") for c in BankConnection.query.filter_by(user_id=user_id, status="active")})
         system = SYSTEM_TEMPLATE.format(today=date.today().isoformat(), banks=", ".join(banks) or "none",
                                         coverage=tools.coverage())
         messages: list[dict] = [{"role": "user", "content": question}]

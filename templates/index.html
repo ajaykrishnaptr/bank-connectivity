@@ -210,9 +210,10 @@
   <div style="font-size:.8125rem;line-height:1.6;color:var(--text-2)">
     <strong style="color:var(--text)">Test data only.</strong>
     UniCredit, Commerzbank, Nordea and ING connect live to each bank's <strong>PSD2 sandbox</strong>
-    (mTLS certificates, consent and SCA). Each demo login is the test user that exists in its bank's
-    sandbox. The <strong>Synthetic Bank</strong> adds 13 months of generated Berlin Group transactions,
-    with new ones every day, so the assistant has enough history. No real customer data is used.
+    (mTLS certificates, consent and SCA). Each demo login is the test user in one bank's sandbox, and also
+    holds <strong>generated accounts</strong> at other banks, with 13 months of history and new transactions
+    every day, so questions across banks have data to answer from. Generated accounts are tagged. No real
+    customer data is used.
   </div>
 </div>
 
@@ -222,31 +223,28 @@
     Supported Banks
   </div>
   <div style="flex:1;height:1px;background:var(--border)"></div>
-  <div style="font-size:.75rem;color:var(--text-3)">4 live sandboxes and a synthetic bank</div>
+  <div style="font-size:.75rem;color:var(--text-3)">4 live sandboxes</div>
 </div>
 
 <!-- ── Bank cards ────────────────────────────────────────────────────────── -->
 <div class="grid grid-3">
 
-{% for bank_id, label, color, country, desc, connect_url in [
+{% for bank_id, label, color, country, desc in [
   ('unicredit',   'UniCredit',   '#c0392b', 'Italy',
-   'See all your UniCredit accounts and transactions in one place. Balances updated automatically.',
-   url_for('unicredit_connect')),
+   'See all your UniCredit accounts and transactions in one place. Balances updated automatically.'),
   ('commerzbank', 'Commerzbank', '#e67e22', 'Germany',
-   'Link your Commerzbank account and get a full view of your spending and balance at a glance.',
-   url_for('commerzbank_connect')),
+   'Link your Commerzbank account and get a full view of your spending and balance at a glance.'),
   ('nordea',      'Nordea',      '#3498db', 'Finland · Sweden · Norway · Denmark',
-   'Connect your Nordea account from anywhere in Scandinavia and track everything in one dashboard.',
-   url_for('nordea_connect')),
+   'Connect your Nordea account from anywhere in Scandinavia and track everything in one dashboard.'),
   ('ing', 'ING', '#FF6200', 'Netherlands · Belgium · Germany',
-   'Connect your ING account and see all your balances and transactions in one unified dashboard.',
-   url_for('ing_connect')),
-  ('synthbank', 'Synthetic Bank', '#6d28d9', 'Germany · Finland · Sweden · Netherlands · Italy',
-   'Berlin Group test bank with 13 months of generated history and a daily feed of new transactions.',
-   url_for('synthbank_connect')),
+   'Connect your ING account and see all your balances and transactions in one unified dashboard.'),
 ] %}
 
-{% set conn = connections.get(bank_id) %}
+{% set connect_url = url_for('connect_bank', bank=bank_id) %}
+{# A bank counts as connected when its live or its generated-account connection is active. #}
+{% set live = connections.get(bank_id) %}
+{% set gen = connections.get('gen_' ~ bank_id) %}
+{% set conn = live if (live and live.status == 'active') else (gen if (gen and gen.status == 'active') else (live or gen)) %}
 
 <div class="bank-card" style="border-top:3px solid {{ color }}">
 
@@ -280,7 +278,22 @@
   </div>
 
   {% set sb = sandbox_login.get(bank_id) %}
-  {% if sb %}
+  {% if demo and bank_id != demo.home_bank %}
+  <!-- Demo login at a bank that is not its live sandbox bank -->
+  <div style="margin:0 1.5rem 1.125rem;padding:.7rem .8rem;border-radius:10px;
+    background:{{ color }}08;border:1px dashed {{ color }}40">
+    <div style="font-size:.6rem;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:{{ color }};margin-bottom:.35rem">
+      {% if bank_id in demo.banks %}Generated accounts{% else %}No account here{% endif %}
+    </div>
+    <div style="font-size:.7rem;color:var(--text-3);line-height:1.5">
+      {% if bank_id in demo.banks %}
+        {{ demo.name }} holds generated test accounts at {{ label }}. Approve access on the consent screen.
+      {% else %}
+        {{ demo.name }} has no account at {{ label }}, so the bank sign-in will fail.
+      {% endif %}
+    </div>
+  </div>
+  {% elif sb %}
   <!-- Sandbox login: what the bank's sandbox asks for at the consent step -->
   <div style="margin:0 1.5rem 1.125rem;padding:.7rem .8rem;border-radius:10px;
     background:{{ color }}08;border:1px dashed {{ color }}40">
@@ -295,7 +308,7 @@
         border-radius:6px;padding:.05rem .4rem;cursor:pointer">Copy</button>
     </div>
     {% endfor %}
-    <div style="font-size:.7rem;color:var(--text-3);line-height:1.5">{{ sb['note'] }}</div>
+    <div style="font-size:.7rem;color:var(--text-3);line-height:1.5">{{ sb['note'] }}{% if demo and demo.home_bank == bank_id and bank_id in demo.banks %} Also brings {{ demo.name }}'s generated accounts at {{ label }}.{% endif %}</div>
   </div>
   {% endif %}
 

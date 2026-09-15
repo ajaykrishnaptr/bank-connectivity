@@ -119,6 +119,11 @@
             <span class="dot" style="background:{{ r.color }}"></span>
             {{ r.account.bank | bank_name }}
           </span>
+          {% if r.account is generated %}
+          <span class="pill" style="margin-left:.25rem;background:#f1f5f9;color:#64748b;border:1px solid #e2e8f0;font-size:.62rem">generated</span>
+          {% else %}
+          <span class="pill" style="margin-left:.25rem;background:#ecfdf5;color:#047857;border:1px solid #a7f3d0;font-size:.62rem">live sandbox</span>
+          {% endif %}
         </td>
         <td class="mono text-muted" style="font-size:.75rem">{{ r.account.iban }}</td>
         <td class="text-right fw-700 {% if r.balance_nat >= 0 %}text-green{% else %}text-red{% endif %}">

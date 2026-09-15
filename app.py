@@ -35,7 +35,7 @@ from statistics import mean, median
 from urllib.parse import parse_qs, urlparse
 
 from dotenv import load_dotenv
-from flask import Flask, flash, redirect, render_template, request, session, url_for
+from flask import Flask, abort, flash, redirect, render_template, request, session, url_for
 from flask_login import LoginManager, current_user, login_required, login_user, logout_user
 from werkzeug.security import check_password_hash, generate_password_hash
 
@@ -540,6 +540,7 @@ IS_HOSTED = bool(os.getenv("VERCEL"))
 
 app.jinja_env.filters["money"] = _money
 app.jinja_env.filters["bank_name"] = _bank_name
+app.jinja_env.tests["generated"] = lambda account: bool(account and (account.resource_id or "").startswith("SB-"))
 
 
 @app.context_processor
@@ -560,6 +561,13 @@ app.register_blueprint(synthbank_api.bp)
 # should move into the migration scripts.
 with app.app_context():
     db.create_all()
+    # create_all never alters existing tables: add columns introduced later.
+    from sqlalchemy import inspect as _inspect, text as _text
+    _cols = {c["name"] for c in _inspect(db.engine).get_columns("sb_accounts")}
+    for _name, _ddl in (("bank", "VARCHAR(20)"), ("role", "VARCHAR(10) NOT NULL DEFAULT 'main'")):
+        if _name not in _cols:
+            with db.engine.begin() as _conn:
+                _conn.execute(_text(f"ALTER TABLE sb_accounts ADD COLUMN {_name} {_ddl}"))
 
 
 # ── DB-scoping helpers ───────────────────────────────────────────────────────
@@ -588,6 +596,27 @@ def _get_connection(bank: str) -> BankConnection | None:
     return BankConnection.query.filter_by(
         user_id=current_user.id, bank=bank, status="active"
     ).first()
+
+
+def _demo_profile() -> dict | None:
+    """Name, home bank and banks with generated accounts for a demo login; None for sign-ups."""
+    cust = _demo_customer()
+    if cust is None:
+        return None
+    return {"name": cust.name, "home_bank": synthbank_store.home_bank(cust.customer_id),
+            "banks": synthbank_store.generated_banks(cust.customer_id)}
+
+
+def _demo_customer():
+    """The generated-data customer behind a demo login, or None for sign-ups."""
+    return synthbank_store.customer_for_email(current_user.email)
+
+
+def _live_blocked(bank: str) -> bool:
+    """A live sandbox holds only its own test user, so a demo login may use the
+    live flow only at its home bank. Other banks go through /connect/<bank>."""
+    cust = _demo_customer()
+    return cust is not None and synthbank_store.home_bank(cust.customer_id) != bank
 
 
 def _upsert_connection(bank: str, access_token: str | None = None,
@@ -619,6 +648,12 @@ def _upsert_connection(bank: str, access_token: str | None = None,
         "bank": bank, "is_new": is_new,
     })
     _fetch_and_store(bank, conn)
+    # A demo login connecting its home bank live also gets its generated
+    # accounts at that bank, so one connect shows the whole relationship.
+    cust = _demo_customer() if bank in synthbank_store.LIVE_BANKS else None
+    if cust is not None and bank in synthbank_store.generated_banks(cust.customer_id):
+        consent = synthbank_client.create_consent(cust.customer_id, bank)
+        _upsert_connection(synthbank_store.GEN_PREFIX + bank, consent_id=consent["consentId"])
     return conn
 
 
@@ -638,6 +673,20 @@ def _fetch_and_store(bank: str, conn: BankConnection) -> None:
     """
     import time as _time
     t0 = _time.time()
+    gen_bank = synthbank_store.generated_bank(bank)
+    if gen_bank:
+        # Generated accounts: read from the synthetic bank, stored under the real
+        # bank's name so they add up with that bank's live sandbox accounts.
+        saved = db_utils.upsert_accounts(gen_bank, synthbank_client.get_accounts(conn.consent_id), user_id=conn.user_id)
+        for acc in saved:
+            db_utils.upsert_transactions(gen_bank, acc.resource_id,
+                                         synthbank_client.get_transactions(conn.consent_id, acc.resource_id),
+                                         user_id=conn.user_id)
+        log.info("sync.complete", extra={
+            "event": "sync.complete", "user_id": conn.user_id, "bank": bank,
+            "account_count": len(saved), "latency_ms": int((_time.time() - t0) * 1000),
+        })
+        return saved
     if bank == "nordea":
         account_list = nordea_client.get_accounts(conn.access_token)
     elif bank == "commerzbank":
@@ -645,8 +694,6 @@ def _fetch_and_store(bank: str, conn: BankConnection) -> None:
         account_list = commerzbank_client.get_accounts(token, conn.consent_id)
     elif bank == "ing":
         account_list = ing_client.get_accounts(conn.access_token)
-    elif bank == "synthbank":
-        account_list = synthbank_client.get_accounts(conn.consent_id)
     else:  # unicredit
         account_list = psd2_client.get_accounts(app.config["SANDBOX_BASE_URL"], conn.consent_id)
         for a in account_list:
@@ -668,8 +715,6 @@ def _fetch_and_store(bank: str, conn: BankConnection) -> None:
         elif bank == "commerzbank":
             token = commerzbank_client.get_oauth_token()
             txn_data = commerzbank_client.get_transactions(token, conn.consent_id, acc.resource_id)
-        elif bank == "synthbank":
-            txn_data = synthbank_client.get_transactions(conn.consent_id, acc.resource_id)
         elif bank == "ing":
             try:
                 txn_data = ing_client.get_transactions(conn.access_token, acc.resource_id)
@@ -686,8 +731,8 @@ def _fetch_and_store(bank: str, conn: BankConnection) -> None:
         db_utils.upsert_transactions(bank, acc.resource_id, txn_data, user_id=conn.user_id)
 
     # Live sandbox data is small: let the model categorise a few new merchants
-    # straight away. The synthetic bank waits for the categorise cron job.
-    if bank != "synthbank" and llm.available():
+    # straight away. Generated accounts wait for the categorise cron job.
+    if llm.available():
         try:
             cat.upgrade_provisional(limit=int(os.getenv("SYNC_CATEGORISE_LIMIT", "10")))
         except Exception as exc:  # noqa: BLE001 — categorisation must never break a sync
@@ -740,6 +785,7 @@ def index():
         potential_savings=potential_savings,
         savings_breakdown=savings_breakdown,
         sandbox_login=SANDBOX_LOGIN,
+        demo=_demo_profile(),
     )
 
 
@@ -765,9 +811,11 @@ def disconnect(bank):
     """Mark a bank connection as revoked. We deliberately do NOT delete
     accounts / transactions — historical analytics should keep working
     even after the user disconnects from the bank."""
-    conn = BankConnection.query.filter_by(user_id=current_user.id, bank=bank).first()
-    if conn:
+    conns = BankConnection.query.filter(BankConnection.user_id == current_user.id,
+                                        BankConnection.bank.in_([bank, synthbank_store.GEN_PREFIX + bank])).all()
+    for conn in conns:
         conn.status = "revoked"
+    if conns:
         db.session.commit()
         log.info("connection.disconnect", extra={
             "event": "connection.disconnect", "user_id": current_user.id, "bank": bank,
@@ -785,18 +833,19 @@ def disconnect(bank):
 DEMO_PASSWORD = "TestPass123"
 # Each persona is the test user that exists in that bank's PSD2 sandbox, so the
 # sandbox SCA screen and the returned account owner match the login.
-# `sandbox` tells the viewer what the bank's own sandbox asks for at the
-# consent step, so nobody has to look it up on the bank's developer portal.
+# `banks` lists where the persona holds accounts: the live sandbox bank first,
+# then banks with generated accounts. `sandbox` tells the viewer what the bank's
+# own sandbox asks for at the consent step.
 DEMO_LOGIN = [
-    {"name": "Thomas Mann",   "email": "thomas.mann@example.de",  "banks": "Commerzbank sandbox · synthetic bank (EUR)",
+    {"name": "Thomas Mann",   "email": "thomas.mann@example.de",  "banks": "Commerzbank (live sandbox) · ING",
      "sandbox": "Commerzbank PSU-ID DE80480800200405423400 · consent pre-approved"},
-    {"name": "Aino Salo",     "email": "aino.salo@example.fi",    "banks": "Nordea FI sandbox · synthetic bank (EUR)",
+    {"name": "Aino Salo",     "email": "aino.salo@example.fi",    "banks": "Nordea FI (live sandbox) · UniCredit",
      "sandbox": "Nordea FI · the sandbox approves the consent, no bank login"},
-    {"name": "Margit Alros",  "email": "margit.alros@example.se", "banks": "Nordea SE sandbox · synthetic bank (SEK)",
+    {"name": "Margit Alros",  "email": "margit.alros@example.se", "banks": "Nordea SE (live sandbox, SEK) · Commerzbank · ING · UniCredit",
      "sandbox": "Nordea SE · choose SE, the sandbox approves the consent"},
-    {"name": "A van Dijk",    "email": "a.vandijk@example.nl",    "banks": "ING NL sandbox · synthetic bank (EUR)",
+    {"name": "A van Dijk",    "email": "a.vandijk@example.nl",    "banks": "ING NL (live sandbox) · Commerzbank",
      "sandbox": "ING · pick profile \"Hr A van Dijk, Mw B Mol-van Dijk\""},
-    {"name": "Mario Rossi",   "email": "mario.rossi@example.it",  "banks": "UniCredit IT sandbox · synthetic bank (EUR)",
+    {"name": "Mario Rossi",   "email": "mario.rossi@example.it",  "banks": "UniCredit IT (live sandbox) · Commerzbank",
      "sandbox": "UniCredit bank login · ituser2bgk / pwituser2bgk"},
 ]
 
@@ -811,8 +860,6 @@ SANDBOX_LOGIN = {
                     "note": "No bank login: Nordea's sandbox approves the consent. Choose FI or SE."},
     "ing":         {"values": [("Profile", "Hr A van Dijk, Mw B Mol-van Dijk")],
                     "note": "Pick the profile on ING's page, then paste the code from the example.com address bar."},
-    "synthbank":   {"values": [],
-                    "note": "No bank login: approve on the simulated consent screen."},
 }
 
 
@@ -1188,6 +1235,8 @@ def unicredit_connect():
     """Step 1 of the UniCredit flow: ask the bank to create a consent
     and redirect the user to its SCA (Strong Customer Authentication)
     page. Comes back to /callback when the user finishes."""
+    if _live_blocked("unicredit"):
+        return redirect(url_for("connect_bank", bank="unicredit"))
     try:
         sca_url = auth.initiate_consent_flow()
         return redirect(sca_url)
@@ -1202,6 +1251,8 @@ def callback():
     """Step 2 of UniCredit: the user has finished SCA in the bank's
     UI. We re-check consent status — only "valid" means we can fetch
     data — and persist the connection."""
+    if _live_blocked("unicredit"):
+        return redirect(url_for("connect_bank", bank="unicredit"))
     try:
         status = auth.check_and_store_consent_status()
         if status == "valid":
@@ -1223,6 +1274,8 @@ def commerzbank_connect():
     """Show the Commerzbank consent form. We validate the OAuth client
     credentials up front so an obvious "wrong client_id" error
     surfaces here rather than after the user submits the consent form."""
+    if _live_blocked("commerzbank"):
+        return redirect(url_for("connect_bank", bank="commerzbank"))
     try:
         commerzbank_client.get_oauth_token()
         return render_template("cb_consent.html", consent_id=commerzbank_client.SANDBOX_CONSENT)
@@ -1237,6 +1290,8 @@ def commerzbank_authorize():
     """User submitted the consent form. Re-fetch the consent status
     from the bank — only "valid" means SCA is complete and we can
     start pulling data."""
+    if _live_blocked("commerzbank"):
+        return redirect(url_for("connect_bank", bank="commerzbank"))
     consent_id = request.form.get("consent_id")
     if not consent_id:
         flash("Missing consent ID.", "error")
@@ -1262,6 +1317,8 @@ def commerzbank_authorize():
 def nordea_connect():
     """Show the Nordea country picker. The actual OAuth dance starts
     when the user posts to /nordea/authorize."""
+    if _live_blocked("nordea"):
+        return redirect(url_for("connect_bank", bank="nordea"))
     default = "SE" if (current_user.email or "").endswith(".se") else nordea_client.COUNTRY
     return render_template("nordea_consent.html", country=default)
 
@@ -1277,6 +1334,8 @@ def nordea_authorize():
     Location points to Nordea's hosted SCA page and we let the browser
     follow it — they'll come back to /nordea/callback.
     """
+    if _live_blocked("nordea"):
+        return redirect(url_for("connect_bank", bank="nordea"))
     try:
         redirect_uri = app.config["NORDEA_REDIRECT_URI"]
         country = request.form.get("country") if request.form.get("country") in ("FI", "SE", "DK", "NO") else None
@@ -1301,6 +1360,8 @@ def nordea_callback():
     user authenticates. If `code` is missing we render a small form
     that lets the user paste it manually (useful in dev when the
     redirect target is unreachable)."""
+    if _live_blocked("nordea"):
+        return redirect(url_for("connect_bank", bank="nordea"))
     code = request.args.get("code")
     if not code:
         return render_template("nordea_code.html", sca_url=None)
@@ -1324,6 +1385,8 @@ def ing_connect():
     """Start ING's OAuth dance. Validates the app-level token early so
     a misconfigured ING_CLIENT_ID surfaces here rather than after the
     user is bounced to ING's auth URL."""
+    if _live_blocked("ing"):
+        return redirect(url_for("connect_bank", bank="ing"))
     try:
         ing_client.get_app_token()
         state = str(uuid.uuid4())  # CSRF guard for the OAuth round-trip
@@ -1343,6 +1406,8 @@ def ing_enter_code():
     and paste it into this form. We accept either the bare code or the
     full URL — we'll parse the `code=` parameter out either way.
     """
+    if _live_blocked("ing"):
+        return redirect(url_for("connect_bank", bank="ing"))
     if request.method == "POST":
         raw = request.form.get("code", "").strip()
         if "code=" in raw:
@@ -1368,35 +1433,45 @@ def ing_enter_code():
 
 # ── Synthetic bank (Berlin Group AIS test bank, simulated SCA) ───────────────
 
-@app.route("/synthbank/connect")
+_LIVE_CONNECT = {"unicredit": "unicredit_connect", "commerzbank": "commerzbank_connect",
+                 "nordea": "nordea_connect", "ing": "ing_connect"}
+
+
+@app.route("/connect/<bank>")
 @login_required
-def synthbank_connect():
-    """Create a consent for the logged-in demo user's synthetic bank customer
-    and send them to the simulated SCA screen."""
-    cust = synthbank_store.customer_for_email(current_user.email)
-    if cust is None:
-        flash("The synthetic bank only holds data for the demo logins.", "warning")
-        return redirect(url_for("index"))
-    consent = synthbank_client.create_consent(cust.customer_id)
+def connect_bank(bank):
+    """Connect one of the 4 banks.
+
+    Sign-ups use the bank's live sandbox flow. A demo login uses the live flow
+    at its home bank (which also brings its generated accounts there); at any
+    other bank it goes to that bank's generated sign-in, which lists its
+    generated accounts or fails the login when it holds none there.
+    """
+    if bank not in _LIVE_CONNECT:
+        abort(404)
+    cust = _demo_customer()
+    if cust is None or synthbank_store.home_bank(cust.customer_id) == bank:
+        return redirect(url_for(_LIVE_CONNECT[bank]))
+    consent = synthbank_client.create_consent(cust.customer_id, bank)
     return redirect(consent["_links"]["scaRedirect"]["href"])
 
 
 @app.route("/synthbank/callback", methods=["POST"])
 @login_required
 def synthbank_callback():
-    """The user approved the consent on the simulated SCA screen."""
+    """The user approved access to their generated accounts at one bank."""
     consent_id = request.form.get("consent_id", "")
-    if request.form.get("decision") != "approve":
-        flash("Consent refused. Nothing was connected.", "info")
-        return redirect(url_for("index"))
     try:
-        cid = synthbank_client.customer_id_for(consent_id)
-        cust = synthbank_store.customer_for_email(current_user.email)
-        if cust is None or cust.customer_id != cid:
+        bank = synthbank_client.bank_for(consent_id)
+        if request.form.get("decision") != "approve":
+            flash("Consent refused. Nothing was connected.", "info")
+            return redirect(url_for("index"))
+        cust = _demo_customer()
+        if cust is None or bank is None or cust.customer_id != synthbank_client.customer_id_for(consent_id):
             flash("That consent belongs to a different customer.", "error")
             return redirect(url_for("index"))
-        _upsert_connection("synthbank", consent_id=consent_id)
-        flash("Synthetic bank connected. 13 months of transactions fetched.", "success")
+        _upsert_connection(synthbank_store.GEN_PREFIX + bank, consent_id=consent_id)
+        flash(f"{_bank_name(bank)} connected. Generated test accounts fetched.", "success")
         return redirect(url_for("dashboard"))
     except synthbank_client.SynthBankError as e:
         flash(str(e), "error")
@@ -1484,20 +1559,21 @@ def balances(account_id):
     if the user disconnected, redirect home with a warning.
     """
     acc  = _owned_account(account_id)
-    conn = _get_connection(acc.bank)
+    generated = acc.resource_id.startswith("SB-")
+    conn = _get_connection(synthbank_store.GEN_PREFIX + acc.bank if generated else acc.bank)
     if not conn:
         flash(f"No active {_bank_name(acc.bank)} connection.", "warning")
         return redirect(url_for("index"))
     try:
-        if acc.bank == "commerzbank":
+        if generated:
+            balance_list = synthbank_client.get_balances(conn.consent_id, account_id)
+        elif acc.bank == "commerzbank":
             balance_list = commerzbank_client.get_balances(
                 commerzbank_client.get_oauth_token(), conn.consent_id, account_id)
         elif acc.bank == "nordea":
             balance_list = nordea_client.get_balances(conn.access_token, account_id)
         elif acc.bank == "ing":
             balance_list = ing_client.get_balances(conn.access_token, account_id)
-        elif acc.bank == "synthbank":
-            balance_list = synthbank_client.get_balances(conn.consent_id, account_id)
         else:
             balance_list = psd2_client.get_balances(
                 app.config["SANDBOX_BASE_URL"], conn.consent_id, account_id)
@@ -1517,20 +1593,21 @@ def transactions(account_id):
     pages (dashboard, spending, recurring) see them next time.
     """
     acc  = _owned_account(account_id)
-    conn = _get_connection(acc.bank)
+    generated = acc.resource_id.startswith("SB-")
+    conn = _get_connection(synthbank_store.GEN_PREFIX + acc.bank if generated else acc.bank)
     if not conn:
         flash(f"No active {_bank_name(acc.bank)} connection.", "warning")
         return redirect(url_for("index"))
     try:
-        if acc.bank == "commerzbank":
+        if generated:
+            txn_data = synthbank_client.get_transactions(conn.consent_id, account_id)
+        elif acc.bank == "commerzbank":
             txn_data = commerzbank_client.get_transactions(
                 commerzbank_client.get_oauth_token(), conn.consent_id, account_id)
         elif acc.bank == "nordea":
             txn_data = nordea_client.get_transactions(conn.access_token, account_id)
         elif acc.bank == "ing":
             txn_data = ing_client.get_transactions(conn.access_token, account_id)
-        elif acc.bank == "synthbank":
-            txn_data = synthbank_client.get_transactions(conn.consent_id, account_id)
         else:
             txn_data = psd2_client.get_transactions(
                 app.config["SANDBOX_BASE_URL"], conn.consent_id, account_id)
@@ -1544,7 +1621,7 @@ def transactions(account_id):
 
 
 # Hook used by the feed cron to re-sync synthetic bank connections.
-app.config["SYNTHBANK_SYNC"] = lambda conn: _fetch_and_store("synthbank", conn)
+app.config["SYNTHBANK_SYNC"] = lambda conn: _fetch_and_store(conn.bank, conn)
 
 
 # Empty DB? Create the 5 demo logins and their synthetic bank history so a

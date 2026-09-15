@@ -224,6 +224,11 @@ class SbAccount(db.Model):
     product     = db.Column(db.String(60))
     cash_account_type = db.Column(db.String(8), default="CACC")
     balance     = db.Column(db.Numeric(18, 2), nullable=False, default=0)
+    # Demo customers hold generated accounts at the banks FintNet connects
+    # (unicredit, commerzbank, nordea, ing); the evaluation population has none.
+    bank        = db.Column(db.String(20), index=True)
+    # main (salary, rent, bills), savings, spend (subscriptions, shopping) or daily (dining, transport, groceries)
+    role        = db.Column(db.String(10), nullable=False, default="main")
 
 
 class SbTransaction(db.Model):

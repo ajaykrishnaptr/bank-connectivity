@@ -7,8 +7,9 @@ NextGenPSD2 field names, the same shapes `db_utils` already stores for the
 real sandboxes. The same payloads are also served over HTTP by
 `synthbank/api.py` under /synthetic-bank/v1.
 
-Consents are signed tokens naming one customer. Ground-truth labels are never
-read here (label firewall).
+Consents are signed tokens naming one customer and, for demo customers, one
+bank: a consent for Commerzbank covers only that customer's Commerzbank
+accounts. Ground-truth labels are never read here (label firewall).
 """
 from __future__ import annotations
 
@@ -33,18 +34,31 @@ def _serializer() -> URLSafeSerializer:
     return URLSafeSerializer(os.getenv("FLASK_SECRET_KEY", "dev-secret"), salt="synthbank-consent")
 
 
-def create_consent(customer_id: str) -> dict:
-    """A Berlin Group style consent response; SCA happens on /synthetic-bank/authorise."""
-    consent_id = _serializer().dumps({"c": customer_id})
+def create_consent(customer_id: str, bank: str | None = None) -> dict:
+    """A Berlin Group style consent response; SCA happens on /synthetic-bank/authorise.
+    `bank` limits the consent to the customer's accounts at that bank."""
+    payload = {"c": customer_id, "b": bank} if bank else {"c": customer_id}
+    consent_id = _serializer().dumps(payload)
     return {"consentStatus": "received", "consentId": consent_id,
             "_links": {"scaRedirect": {"href": f"/synthetic-bank/authorise/{consent_id}"}}}
 
 
-def customer_id_for(consent_id: str) -> str:
+def _consent(consent_id: str) -> dict:
     try:
-        return _serializer().loads(consent_id)["c"]
-    except (BadSignature, KeyError, TypeError) as exc:
+        data = _serializer().loads(consent_id)
+    except (BadSignature, TypeError) as exc:
         raise SynthBankError("Invalid or unknown consent", status_code=401) from exc
+    if not isinstance(data, dict) or "c" not in data:
+        raise SynthBankError("Invalid or unknown consent", status_code=401)
+    return data
+
+
+def customer_id_for(consent_id: str) -> str:
+    return _consent(consent_id)["c"]
+
+
+def bank_for(consent_id: str) -> str | None:
+    return _consent(consent_id).get("b")
 
 
 def _money(amount, currency: str) -> dict:
@@ -52,21 +66,24 @@ def _money(amount, currency: str) -> dict:
 
 
 def get_accounts(consent_id: str) -> list[dict]:
-    cid = customer_id_for(consent_id)
+    consent = _consent(consent_id)
+    cid, bank = consent["c"], consent.get("b")
     cust = db.session.get(SbCustomer, cid)
     if cust is None:
         raise SynthBankError("Customer not found", status_code=404)
-    rows = db.session.scalars(select(SbAccount).where(SbAccount.customer_id == cid)
-                              .order_by(SbAccount.resource_id)).all()
+    q = select(SbAccount).where(SbAccount.customer_id == cid)
+    if bank:
+        q = q.where(SbAccount.bank == bank)
+    rows = db.session.scalars(q.order_by(SbAccount.resource_id)).all()
     return [{"resourceId": a.resource_id, "iban": a.iban, "currency": a.currency, "name": a.name,
              "product": a.product, "cashAccountType": a.cash_account_type, "ownerName": cust.name,
              "bic": "SYNB"} for a in rows]
 
 
 def _owned_account(consent_id: str, resource_id: str) -> SbAccount:
-    cid = customer_id_for(consent_id)
+    consent = _consent(consent_id)
     acct = db.session.get(SbAccount, resource_id)
-    if acct is None or acct.customer_id != cid:
+    if acct is None or acct.customer_id != consent["c"] or (consent.get("b") and acct.bank != consent["b"]):
         raise SynthBankError("Account not covered by consent", status_code=403)
     return acct
 

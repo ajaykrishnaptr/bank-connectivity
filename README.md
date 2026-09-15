@@ -1,10 +1,10 @@
 # FintNet
 
-An Open Banking account information app. It connects to the PSD2 developer sandboxes of 4 European banks and to a synthetic Berlin Group bank, shows every account in one place, and answers money questions with Claude Haiku while code computes every figure.
+An Open Banking account information app. It connects to the PSD2 developer sandboxes of 4 European banks, shows every account in one place, and answers money questions across banks with Claude Haiku while code computes every figure.
 
 **Live demo: https://bank-connectivity.vercel.app**
 
-> **Test data only.** UniCredit, Commerzbank, Nordea and ING connect to each bank's public PSD2 developer sandbox with test users. The synthetic bank generates its own history. No real customer data is used anywhere.
+> **Test data only.** UniCredit, Commerzbank, Nordea and ING connect to each bank's public PSD2 developer sandbox with test users. The demo logins also hold generated accounts at those banks, tagged as generated in the app. No real customer data is used anywhere.
 
 ---
 
@@ -17,7 +17,7 @@ An Open Banking account information app. It connects to the PSD2 developer sandb
 - [Architecture](#architecture)
 - [Run it locally](#run-it-locally)
 - [Deploy on Vercel](#deploy-on-vercel)
-- [Synthetic bank](#synthetic-bank)
+- [Generated accounts](#generated-accounts)
 - [Bank integration notes](#bank-integration-notes)
 - [UniCredit trust chain: self-hosted OCSP and CRL](#unicredit-trust-chain-self-hosted-ocsp-and-crl)
 - [Logging and tracing](#logging-and-tracing)
@@ -44,16 +44,34 @@ The app is multi-tenant: each login sees only its own connections and data. Disc
 
 ## Banks and test logins
 
-All logins use the password **`TestPass123`**. The login page lists them as one-click chips. Each login is the test user that exists in one bank's sandbox, so the bank's consent screen and the returned account owner match the login. Each login is also a synthetic bank customer with 13 months of history.
+All logins use the password **`TestPass123`**. The login page lists them as chips that fill in the form. Each login is the test user in one bank's live sandbox (its home bank), and also holds generated accounts at one or more of the 4 banks, so questions across banks have 13 months of data to answer from.
 
-| Login | Live sandbox | Standard and auth | Consent step in the sandbox |
-|---|---|---|---|
-| `thomas.mann@example.de` | Commerzbank (DE), 2 EUR accounts | OAuth2 client credentials plus a consent | Pre-approved sandbox consent |
-| `aino.salo@example.fi` | Nordea (FI), 3 EUR accounts | OAuth2 authorization code | Mock authorizer `70311198` |
-| `margit.alros@example.se` | Nordea (SE), SEK and EUR accounts | OAuth2 authorization code | Mock authorizer; choose SE on the consent page |
-| `a.vandijk@example.nl` | ING (NL), profile "Hr A van Dijk, Mw B Mol-van Dijk" | mTLS, HTTP Signatures, OAuth2 authorization code | Pick the profile on ING's page, then paste the code at `/ing/enter-code` |
-| `mario.rossi@example.it` | UniCredit (IT), account `IT18L0200811770000019486580` | Berlin Group NextGenPSD2, mTLS with a QWAC | Sign in as `ituser2bgk` / `pwituser2bgk` (UniCredit developer portal, Test Data page) and grant the consent |
-| All 5 | Synthetic Bank (DE, FI, SE, NL, IT) | Berlin Group AIS inside this app | Simulated consent screen |
+| Login | Live sandbox (home bank) | Generated accounts |
+|---|---|---|
+| `mario.rossi@example.it` | UniCredit (IT), account `IT18L0200811770000019486580` | UniCredit current and savings, Commerzbank card account |
+| `thomas.mann@example.de` | Commerzbank (DE), 2 EUR accounts | Commerzbank current and savings, ING card account |
+| `aino.salo@example.fi` | Nordea (FI), 3 EUR accounts | Nordea current and savings, UniCredit everyday account |
+| `margit.alros@example.se` | Nordea (SE), SEK and EUR accounts | Nordea current account (SEK), ING savings, Commerzbank card account, UniCredit everyday account |
+| `a.vandijk@example.nl` | ING (NL), profile "Hr A van Dijk, Mw B Mol-van Dijk" | ING current and savings, Commerzbank card account |
+
+Every login sees all 4 banks and picks which to connect:
+
+| Connecting | What happens |
+|---|---|
+| The home bank | The bank's live sandbox flow, then the login's generated accounts at that bank are added too |
+| Another bank where the login holds generated accounts | A sign-in and consent screen in that bank's colours lists the generated accounts |
+| A bank where the login holds no account | The sign-in fails and nothing is connected |
+
+Live sandbox consent steps:
+
+| Bank | Consent step in the sandbox |
+|---|---|
+| UniCredit | Sign in as `ituser2bgk` / `pwituser2bgk` (UniCredit developer portal, Test Data page), grant the consent, press Proceed |
+| Commerzbank | PSU-ID `DE80480800200405423400`; the sandbox consent is pre-approved |
+| Nordea | No bank login: the sandbox approves the consent. Choose FI or SE |
+| ING | Pick the profile on ING's page, then paste the code at `/ing/enter-code` |
+
+Accounts created through sign-up hold no generated accounts and use the live sandbox flow at every bank.
 
 ---
 
@@ -127,7 +145,7 @@ flowchart LR
   F -->|OAuth2| CB[Commerzbank sandbox]
   F -->|OAuth2| NO[Nordea sandbox]
   F -->|mTLS, HTTP Signatures| ING[ING sandbox]
-  F -->|Berlin Group AIS| SB[Synthetic bank in the app]
+  F -->|Berlin Group AIS| SB[Generated accounts in the app]
   F --> DB[(Neon Postgres)]
   F -->|tools and answers| H[Claude Haiku]
   F --> LF[Langfuse traces and evaluations]
@@ -165,7 +183,7 @@ Seeding is re-runnable: it only creates missing users, customers and history.
 
 | Variable | For |
 |---|---|
-| `FLASK_SECRET_KEY` | Sessions and synthetic bank consent tokens |
+| `FLASK_SECRET_KEY` | Sessions and generated-account consent tokens |
 | `ANTHROPIC_API_KEY`, `LLM_MODEL=claude-haiku-4-5` | Assistant and categoriser. Without a key, the categoriser falls back to Ollama or rules |
 | `CB_CLIENT_ID`, `CB_CLIENT_SECRET` | Commerzbank sandbox |
 | `NORDEA_CLIENT_ID`, `NORDEA_CLIENT_SECRET`, `NORDEA_COUNTRY` | Nordea sandbox |
@@ -194,7 +212,7 @@ Seeding is re-runnable: it only creates missing users, customers and history.
 
 | UTC | Route | Does |
 |---|---|---|
-| 01:00 | `/cron/feed` | Books missing days in the synthetic bank (up to 7 per run), drops history older than 13 months, re-syncs connected users |
+| 01:00 | `/cron/feed` | Books missing days of generated transactions (up to 7 per run), drops history older than 13 months, re-syncs connected users |
 | 02:00 | `/cron/categorise` | Sends merchants with a provisional rule category to Claude Haiku, capped per run |
 | 03:00 | `/cron/evaluate` | Builds the day's Langfuse dataset and runs one experiment on it |
 | 04:00 | `/cron/health` | CRL next update, OCSP status of the UniCredit certificate, certificate expiry |
@@ -207,16 +225,18 @@ curl -H "Authorization: Bearer $CRON_SECRET" https://bank-connectivity.vercel.ap
 
 ---
 
-## Synthetic bank
+## Generated accounts
 
-The live sandboxes return a handful of static transactions, which is too little history for an assistant or an evaluation. `synthbank/` is a Berlin Group NextGenPSD2 AIS test bank inside the app.
+The live sandboxes return a handful of static transactions, which is too little history for an assistant or an evaluation. `synthbank/` generates accounts and transactions and serves them through a Berlin Group NextGenPSD2 AIS API inside the app.
 
-- **Customers:** the 5 demo logins plus an evaluation population (200 by default) across DE, FI, SE (in SEK), NL and IT.
+- **Customers:** the 5 demo logins, plus an evaluation population (200 by default) across DE, FI, SE (in SEK), NL and IT that no login can see.
+- **Accounts at real bank names:** each demo login holds generated accounts at the banks listed in `synthbank/catalog.py` (`DEMO_CUSTOMERS`), each with a role. The main account books salary, rent and bills; the savings account gets the monthly savings transfer; a card account books subscriptions, gym and shopping; an everyday account books dining, transport and half the groceries. The main account tops up card and everyday accounts at other banks on the 2nd of each month. In the app, generated accounts are stored under the bank's name so they add up with its live sandbox accounts, and are tagged as generated.
 - **History:** a rolling 13 months, seeded once and then extended one day at a time by the feed job. Random generators are seeded by customer and date, so reruns reproduce the same data.
 - **Realistic merchants:** each purchase draws a category weighted by persona, then a merchant that belongs to it: about 60% known merchants, 30% new merchants built from templates and 10% hard cases (payment-facilitator prefixes, truncation, typos, misleading names). No language model writes the data.
 - **Subscriptions and price rises:** about a third of customers get a 15% price rise on one subscription partway through the year, so the price-rise alert has something real to find.
 - **Label firewall:** the true category of every transaction lives in `sb_labels`, which only the evaluation job reads. The API, the tools and the model never see it.
-- **API:** `POST /synthetic-bank/v1/consents`, `GET /synthetic-bank/v1/accounts`, `.../balances` and `.../transactions` with a `Consent-ID` header, and a simulated consent screen at `/synthetic-bank/authorise/<consent>`.
+- **API:** `POST /synthetic-bank/v1/consents?bank=<bank>`, `GET /synthetic-bank/v1/accounts`, `.../balances` and `.../transactions` with a `Consent-ID` header, and a sign-in and consent screen at `/synthetic-bank/authorise/<consent>`. A consent covers one customer's accounts at one bank.
+- **Rebuild:** `python seed_data.py --population 0 --reset-demo` regenerates the demo logins' accounts and removes their FintNet accounts and connections.
 
 ---
 
@@ -287,7 +307,7 @@ The bank imports `chain.crt` once; later leaf certificates under the same interm
 | `models.py`, `db_utils.py` | Tables and per-user upserts, with duplicate protection on transaction id |
 | `auth.py` | UniCredit consent flow helpers |
 | `psd2_client.py`, `commerzbank_client.py`, `nordea_client.py`, `ing_client.py` | Live sandbox clients |
-| `synthbank/`, `synthbank_client.py` | Synthetic bank: catalogue, generator, store, API, client |
+| `synthbank/`, `synthbank_client.py` | Generated accounts: catalogue, generator, store, API, client |
 | `llm.py` | The only Claude call site: model, call cap, errors, tracing |
 | `assistant.py` | `/ask` tools, tool loop and refusal |
 | `categorize.py` | Categorisation waterfall and provisional upgrades |
@@ -297,7 +317,7 @@ The bank imports `chain.crt` once; later leaf certificates under the same interm
 | `observability.py`, `eventlog.py`, `logging_config.py` | Langfuse, event log, application log |
 | `currency_utils.py` | ECB exchange rates |
 | `runtime_certs.py` | Certificates from env vars on Vercel |
-| `seed_data.py` | Demo logins and synthetic customers |
+| `seed_data.py` | Demo logins, generated customers, `--reset-demo` |
 | `generate_psd2_cert.py`, `generate_ocsp_signer.py`, `refresh_crl.py`, `deploy_crl.sh` | Certificate and revocation tooling (local only) |
 | `templates/` | Jinja pages |
 

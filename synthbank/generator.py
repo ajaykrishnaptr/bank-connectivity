@@ -86,17 +86,27 @@ def all_customers(population: int) -> list[dict]:
     return demo + build_population(population)
 
 
+_ROLE_NAME = {"main": "Current account", "savings": "Savings account", "spend": "Card account",
+              "daily": "Everyday account"}
+
+
 def accounts_for(customer: dict) -> list[dict]:
+    """Generated accounts. Demo customers hold them at the banks in their catalogue
+    entry; the evaluation population holds one current account with no bank."""
     country = customer["country"]
-    cur = C.COUNTRIES[country]["currency"]
     base = _num(customer["customer_id"]) % 10**9
-    accts = [{"resource_id": f"SB-{customer['customer_id']}-CUR", "iban": make_iban(country, base),
-              "currency": cur, "name": "Current account", "product": "Synthetic Current Account",
-              "cash_account_type": "CACC"}]
-    if customer.get("email"):  # demo customers also hold a savings account
-        accts.append({"resource_id": f"SB-{customer['customer_id']}-SAV", "iban": make_iban(country, base + 1),
-                      "currency": cur, "name": "Savings account", "product": "Synthetic Savings Account",
-                      "cash_account_type": "SVGS"})
+    demo = C.demo_customer(customer["customer_id"])
+    if demo is None:
+        return [{"resource_id": f"SB-{customer['customer_id']}-CUR", "iban": make_iban(country, base),
+                 "currency": C.COUNTRIES[country]["currency"], "name": "Current account",
+                 "product": "Synthetic Current Account", "cash_account_type": "CACC", "bank": None, "role": "main"}]
+    accts = []
+    for i, (bank, role, currency) in enumerate(demo["accounts"]):
+        iban_country = C.BANK_COUNTRY.get(bank, country if country in ("FI", "SE") else "FI")
+        accts.append({"resource_id": f"SB-{customer['customer_id']}-{bank.upper()}-{role.upper()}",
+                      "iban": make_iban(iban_country, base + i), "currency": currency,
+                      "name": _ROLE_NAME[role], "product": f"{C.BANK_LABEL[bank]} {_ROLE_NAME[role]} (generated)",
+                      "cash_account_type": "SVGS" if role == "savings" else "CACC", "bank": bank, "role": role})
     return accts
 
 
@@ -246,6 +256,9 @@ _BTC = {"card": "PMNT-MCRD-POSD", "dd": "PMNT-RDDT-ESDD", "transfer": "PMNT-ICDT
 
 # ── One day ──────────────────────────────────────────────────────────────────
 
+_SPEND_CATEGORIES = {"Shopping", "Food Delivery", "Entertainment", "Health & Fitness"}
+_TOP_UP_EUR = {"spend": 350.0, "daily": 300.0}
+
 def _poisson(lam: float, rng: random.Random) -> int:
     limit, k, p = math.exp(-lam), 0, 1.0
     while True:
@@ -265,15 +278,28 @@ def transactions_for_day(customer: dict, accounts: list[dict], plan: dict, day: 
     """All transactions a customer books on `day`, as (transaction, label) pairs."""
     rng = random.Random(f"{customer['customer_id']}|{day.isoformat()}")
     country, persona = customer["country"], customer["persona"]
-    fx = C.COUNTRIES[country]["fx"]
-    cur_acct = accounts[0]
+    by_role: dict[str, dict] = {}
+    for a in accounts:
+        by_role.setdefault(a.get("role") or "main", a)
+    cur_acct = by_role.get("main", accounts[0])
     out: list[tuple[dict, dict]] = []
     seq = 0
+
+    def account_for(category: str) -> dict:
+        """Which account books a purchase. Checks the roles before drawing a random
+        number, so a customer with one account keeps the same random sequence."""
+        if category in _SPEND_CATEGORIES and "spend" in by_role:
+            return by_role["spend"]
+        if category in ("Dining", "Transport") and "daily" in by_role:
+            return by_role["daily"]
+        if category == "Groceries" and "daily" in by_role and rng.random() < 0.5:
+            return by_role["daily"]
+        return cur_acct
 
     def add(account: dict, amount_eur: float, category: str, merchant: str, slice_: str, kind: str,
             counterparty_is_creditor: bool, recurring: bool = False, purpose: str | None = None) -> None:
         nonlocal seq
-        amount = round(amount_eur * fx, 2)
+        amount = round(amount_eur * C.FX.get(account["currency"], 1.0), 2)
         mandate = f"MNDT{_num(customer['customer_id'] + merchant) % 10**8:08d}" if kind == "dd" else None
         tx = {
             "transaction_id": hashlib.sha1(f"{account['resource_id']}|{day}|{seq}".encode()).hexdigest()[:24],
@@ -302,17 +328,26 @@ def transactions_for_day(customer: dict, accounts: list[dict], plan: dict, day: 
         client = f"{rng.choice(C.LAST[country])} {rng.choice(_LEGAL[country])}"
         add(cur_acct, rng.uniform(800, 3500), "Income", client, "seen", "invoice", False, False, "SUPP")
 
+    # Card and everyday accounts at other banks are topped up from the main account.
+    if day.day == 2:
+        for role in ("spend", "daily"):
+            if role in by_role:
+                amount = _TOP_UP_EUR[role]
+                add(cur_acct, -amount, "Transfers / Other", "Own account transfer", "seen", "transfer", True, True)
+                add(by_role[role], amount, "Transfers / Other", "Own account transfer", "seen", "transfer", False, True)
+
     for r in plan["recurring"]:
         if day.day != min(r["day"], last):
             continue
         amount = r["amount"] * (1 + rng.uniform(-r.get("jitter", 0), r.get("jitter", 0)))
         if r.get("creep_after") and day >= r["creep_after"]:
             amount *= 1.15
-        if r["kind"] == "savings" and len(accounts) > 1:
+        savings = by_role.get("savings")
+        if r["kind"] == "savings" and savings is not None and savings is not cur_acct:
             add(cur_acct, -amount, "Transfers / Other", "Savings transfer", "seen", "savings", True, True)
-            add(accounts[1], amount, "Transfers / Other", "Savings transfer", "seen", "savings", False, True)
+            add(savings, amount, "Transfers / Other", "Savings transfer", "seen", "savings", False, True)
             continue
-        add(cur_acct, -amount, r["category"], r["merchant"], "seen", r["kind"], True, True)
+        add(account_for(r["category"]), -amount, r["category"], r["merchant"], "seen", r["kind"], True, True)
 
     for category, per_month in C.MONTHLY_RATE[persona].items():
         for _ in range(_poisson(per_month / 30.4, rng)):
@@ -329,5 +364,5 @@ def transactions_for_day(customer: dict, accounts: list[dict], plan: dict, day: 
             if true_cat == "Transfers / Other" and rng.random() < 0.35:
                 add(cur_acct, amount, true_cat, merchant, slice_, kind, False)  # money received from a friend
             else:
-                add(cur_acct, -amount, true_cat, merchant, slice_, kind, True)
+                add(account_for(true_cat), -amount, true_cat, merchant, slice_, kind, True)
     return out

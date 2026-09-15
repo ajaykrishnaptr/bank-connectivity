@@ -21,7 +21,14 @@ from . import generator as G
 
 HISTORY_DAYS = 395          # rolling 13 months
 DEFAULT_POPULATION = 200    # evaluation customers beside the 5 demo logins
-BANK = "synthbank"
+BANK = "synthbank"          # legacy single synthetic bank, removed by reset_demo()
+GEN_PREFIX = "gen_"         # BankConnection.bank for generated accounts, e.g. gen_commerzbank
+LIVE_BANKS = ("unicredit", "commerzbank", "nordea", "ing")
+
+
+def generated_bank(connection_bank: str) -> str | None:
+    """The bank of a generated-account connection (gen_nordea gives nordea), else None."""
+    return connection_bank[len(GEN_PREFIX):] if connection_bank.startswith(GEN_PREFIX) else None
 
 
 def _customer_dict(c: SbCustomer) -> dict:
@@ -30,24 +37,63 @@ def _customer_dict(c: SbCustomer) -> dict:
 
 
 def ensure_customers(population: int, history_start: date) -> int:
-    """Insert demo and population customers plus their accounts if missing. Returns rows added."""
+    """Insert missing customers, and accounts for any customer without them. Returns customers given accounts."""
     existing = set(db.session.scalars(select(SbCustomer.customer_id)))
-    new = [c for c in G.all_customers(population) if c["customer_id"] not in existing]
-    for cust in new:
-        db.session.add(SbCustomer(customer_id=cust["customer_id"], name=cust["name"], country=cust["country"],
-                                  persona=cust["persona"], demo_email=cust["email"], history_start=history_start))
+    wanted = G.all_customers(population)
+    for cust in wanted:
+        if cust["customer_id"] not in existing:
+            db.session.add(SbCustomer(customer_id=cust["customer_id"], name=cust["name"], country=cust["country"],
+                                      persona=cust["persona"], demo_email=cust["email"], history_start=history_start))
     db.session.flush()  # customers first: Postgres enforces the accounts' foreign key
+    with_accounts = set(db.session.scalars(select(SbAccount.customer_id).distinct()))
     added = 0
-    for cust in new:
+    for cust in wanted:
+        if cust["customer_id"] in with_accounts:
+            continue
         rng = random.Random("balance|" + cust["customer_id"])
         for i, acct in enumerate(G.accounts_for(cust)):
             opening = rng.uniform(800, 6000) if i == 0 else rng.uniform(2000, 15000)
             db.session.add(SbAccount(customer_id=cust["customer_id"],
-                                     balance=Decimal(str(round(opening * C.COUNTRIES[cust["country"]]["fx"], 2))),
+                                     balance=Decimal(str(round(opening * C.FX.get(acct["currency"], 1.0), 2))),
                                      **acct))
         added += 1
     db.session.commit()
     return added
+
+
+def reset_demo() -> dict:
+    """Delete the demo customers' generated history and every FintNet account and
+    connection of the demo logins, so the next seed rebuilds them from the catalogue.
+    The evaluation population is left alone."""
+    from models import DismissedAlert, User
+
+    demo_ids = [d["customer_id"] for d in C.DEMO_CUSTOMERS]
+    demo_tx = select(SbTransaction.transaction_id).where(SbTransaction.customer_id.in_(demo_ids))
+    out = {"labels": db.session.execute(delete(SbLabel).where(SbLabel.transaction_id.in_(demo_tx))).rowcount,
+           "sb_transactions": db.session.execute(delete(SbTransaction)
+                                                 .where(SbTransaction.customer_id.in_(demo_ids))).rowcount,
+           "sb_accounts": db.session.execute(delete(SbAccount).where(SbAccount.customer_id.in_(demo_ids))).rowcount}
+    user_ids = select(User.id).where(User.email.in_([d["email"] for d in C.DEMO_CUSTOMERS]))
+    account_ids = select(Account.id).where(Account.user_id.in_(user_ids))
+    out["transactions"] = db.session.execute(delete(Transaction).where(Transaction.account_id.in_(account_ids))).rowcount
+    out["accounts"] = db.session.execute(delete(Account).where(Account.user_id.in_(user_ids))).rowcount
+    out["connections"] = db.session.execute(delete(BankConnection).where(BankConnection.user_id.in_(user_ids))).rowcount
+    out["dismissed_alerts"] = db.session.execute(delete(DismissedAlert)
+                                                 .where(DismissedAlert.user_id.in_(user_ids))).rowcount
+    db.session.commit()
+    return out
+
+
+def generated_banks(customer_id: str) -> list[str]:
+    """Banks where this customer holds generated accounts, in catalogue order."""
+    demo = C.demo_customer(customer_id)
+    return list(dict.fromkeys(bank for bank, _, _ in demo["accounts"])) if demo else []
+
+
+def home_bank(customer_id: str) -> str | None:
+    """The bank whose PSD2 sandbox holds this customer as its test user."""
+    demo = C.demo_customer(customer_id)
+    return demo["home_bank"] if demo else None
 
 
 def _book(days: list[date], novel: float, hard: float, run_label: str,
@@ -65,7 +111,7 @@ def _book(days: list[date], novel: float, hard: float, run_label: str,
         accts = sorted(accounts.get(cust.customer_id, []), key=lambda a: a.cash_account_type != "CACC")
         if not accts:
             continue
-        acct_dicts = [{"resource_id": a.resource_id, "currency": a.currency} for a in accts]
+        acct_dicts = [{"resource_id": a.resource_id, "currency": a.currency, "role": a.role} for a in accts]
         balances = {a.resource_id: Decimal(a.balance) for a in accts}
         plan = G.plan_for(cdict, cust.history_start)
         for day in days:
@@ -145,7 +191,7 @@ def prune(today: date | None = None) -> dict:
     old_ids = select(SbTransaction.transaction_id).where(SbTransaction.booking_date < cutoff)
     labels = db.session.execute(delete(SbLabel).where(SbLabel.transaction_id.in_(old_ids))).rowcount
     txns = db.session.execute(delete(SbTransaction).where(SbTransaction.booking_date < cutoff)).rowcount
-    acct_ids = select(Account.id).where(Account.bank == BANK)
+    acct_ids = select(Account.id).where(Account.resource_id.like("SB-%"))
     fintnet = db.session.execute(delete(Transaction).where(Transaction.account_id.in_(acct_ids),
                                                            Transaction.booking_date < cutoff)).rowcount
     db.session.commit()
@@ -157,8 +203,8 @@ def customer_for_email(email: str) -> SbCustomer | None:
 
 
 def sync_all_connections(sync_fn) -> dict:
-    """Re-sync every active synthetic bank connection through `sync_fn(conn)`."""
-    conns = db.session.scalars(select(BankConnection).where(BankConnection.bank == BANK,
+    """Re-sync every active generated-account connection through `sync_fn(conn)`."""
+    conns = db.session.scalars(select(BankConnection).where(BankConnection.bank.like(GEN_PREFIX + "%"),
                                                             BankConnection.status == "active")).all()
     import synthbank_client
 
@@ -175,7 +221,7 @@ def sync_all_connections(sync_fn) -> dict:
             cust = customer_for_email(user.email if user else "")
             if cust is None:
                 continue
-            conn.consent_id = synthbank_client.create_consent(cust.customer_id)["consentId"]
+            conn.consent_id = synthbank_client.create_consent(cust.customer_id, generated_bank(conn.bank))["consentId"]
             db.session.commit()
             reissued += 1
         sync_fn(conn)
