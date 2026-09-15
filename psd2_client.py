@@ -34,6 +34,7 @@ import os
 import logging
 import uuid
 from datetime import datetime, timedelta
+from urllib.parse import urlparse
 
 import requests
 from dotenv import load_dotenv
@@ -95,6 +96,20 @@ def _headers(base_url: str, consent_id: str | None = None) -> dict:
     return h
 
 
+# One cookie-keeping session per process. UniCredit's sandbox sits behind an
+# F5 BIG-IP access gateway: a request without its session cookie is redirected
+# to /my.policy, an HTML page a browser would auto-submit. Keeping the cookies
+# and retrying gets past it, the same way a browser does.
+_http = requests.Session()
+_GATEWAY_RETRIES = 2
+
+
+def _is_gateway_page(resp) -> bool:
+    """True when the F5 gateway answered with its session page, not the API."""
+    return urlparse(resp.url).path.startswith("/my.") or any(
+        (h.headers.get("Location") or "").startswith("/my.") for h in resp.history)
+
+
 def _call(method: str, url: str, **kwargs):
     """Send an mTLS-authenticated request and return decoded JSON.
 
@@ -102,8 +117,15 @@ def _call(method: str, url: str, **kwargs):
     callers only have to catch one exception type.
     """
     try:
-        resp = requests.request(method, url, cert=CERT,
-                                timeout=_DEFAULT_HTTP_TIMEOUT, **kwargs)
+        resp = _http.request(method, url, cert=CERT, timeout=_DEFAULT_HTTP_TIMEOUT, **kwargs)
+        for attempt in range(_GATEWAY_RETRIES):
+            if not _is_gateway_page(resp):
+                break
+            logging.getLogger("fintnet").info("unicredit.gateway_session", extra={
+                "event": "unicredit.gateway_session", "attempt": attempt + 1, "final_url": resp.url})
+            if "errorcode" in resp.url:
+                _http.cookies.clear()  # the gateway ended the session; start a clean one
+            resp = _http.request(method, url, cert=CERT, timeout=_DEFAULT_HTTP_TIMEOUT, **kwargs)
         resp.raise_for_status()
         try:
             return resp.json()
