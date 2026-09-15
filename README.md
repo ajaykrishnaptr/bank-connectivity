@@ -40,6 +40,8 @@ An Open Banking account information app. It connects to the PSD2 developer sandb
 
 The app is multi-tenant: each login sees only its own connections and data. Disconnecting revokes the connection and keeps the history.
 
+**Transfers between a user's own accounts** count in balances but not in income or spending. Every stored transaction keeps its counterparty IBAN (`creditorAccount` or `debtorAccount`); when that IBAN belongs to another of the same user's accounts, the dashboard, spending, recurring payments, spend alerts and the assistant's figures leave it out. The recent-transactions list tags it "Own transfer".
+
 ---
 
 ## Banks and test logins
@@ -230,7 +232,7 @@ curl -H "Authorization: Bearer $CRON_SECRET" https://bank-connectivity.vercel.ap
 The live sandboxes return a handful of static transactions, which is too little history for an assistant or an evaluation. `synthbank/` generates accounts and transactions and serves them through a Berlin Group NextGenPSD2 AIS API inside the app.
 
 - **Customers:** the 5 demo logins, plus an evaluation population (200 by default) across DE, FI, SE (in SEK), NL and IT that no login can see.
-- **Accounts at real bank names:** each demo login holds generated accounts at the banks listed in `synthbank/catalog.py` (`DEMO_CUSTOMERS`), each with a role. The main account books salary, rent and bills; the savings account gets the monthly savings transfer; a card account books subscriptions, gym and shopping; an everyday account books dining, transport and half the groceries. The main account tops up card and everyday accounts at other banks on the 2nd of each month. In the app, generated accounts are stored under the bank's name so they add up with its live sandbox accounts, and are tagged as generated.
+- **Accounts at real bank names:** each demo login holds generated accounts at the banks listed in `synthbank/catalog.py` (`DEMO_CUSTOMERS`), each with a role. The main account books salary, rent and bills; the savings account gets the monthly savings transfer; a card account books subscriptions, gym and shopping; an everyday account books dining, transport and half the groceries. The main account tops up card and everyday accounts at other banks on the 2nd of each month; these transfers and the savings transfer carry the other account's IBAN, so FintNet recognises them as internal. In the app, generated accounts are stored under the bank's name so they add up with its live sandbox accounts, and are tagged as generated.
 - **History:** a rolling 13 months, seeded once and then extended one day at a time by the feed job. Random generators are seeded by customer and date, so reruns reproduce the same data.
 - **Realistic merchants:** each purchase draws a category weighted by persona, then a merchant that belongs to it: about 60% known merchants, 30% new merchants built from templates and 10% hard cases (payment-facilitator prefixes, truncation, typos, misleading names). No language model writes the data.
 - **Subscriptions and price rises:** about a third of customers get a 15% price rise on one subscription partway through the year, so the price-rise alert has something real to find.
