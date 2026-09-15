@@ -88,6 +88,9 @@ def all_customers(population: int) -> list[dict]:
 
 _ROLE_NAME = {"main": "Current account", "savings": "Savings account", "spend": "Card account",
               "daily": "Everyday account"}
+# Short codes keep resource ids within the 40 characters sb_accounts allows.
+_BANK_CODE = {"unicredit": "UC", "commerzbank": "CB", "nordea": "NDA", "ing": "ING"}
+_ROLE_CODE = {"main": "CUR", "savings": "SAV", "spend": "CARD", "daily": "DAY"}
 
 
 def accounts_for(customer: dict) -> list[dict]:
@@ -103,7 +106,7 @@ def accounts_for(customer: dict) -> list[dict]:
     accts = []
     for i, (bank, role, currency) in enumerate(demo["accounts"]):
         iban_country = C.BANK_COUNTRY.get(bank, country if country in ("FI", "SE") else "FI")
-        accts.append({"resource_id": f"SB-{customer['customer_id']}-{bank.upper()}-{role.upper()}",
+        accts.append({"resource_id": f"SB-{customer['customer_id']}-{_BANK_CODE[bank]}-{_ROLE_CODE[role]}",
                       "iban": make_iban(iban_country, base + i), "currency": currency,
                       "name": _ROLE_NAME[role], "product": f"{C.BANK_LABEL[bank]} {_ROLE_NAME[role]} (generated)",
                       "cash_account_type": "SVGS" if role == "savings" else "CACC", "bank": bank, "role": role})
