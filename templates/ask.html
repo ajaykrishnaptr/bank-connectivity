@@ -58,7 +58,7 @@
     <div class="card-label">Answer{% if result.refused %} · refused by policy{% endif %}</div>
     <div class="answer" style="margin-top:.5rem">{{ result.answer }}</div>
     <div class="ai-note">
-      AI-generated from the figures below.
+      {% if result.model %}AI-generated from the figures below.{% else %}Written by FintNet's code; no AI model was called.{% endif %}
       {% if result.trace_id %}Trace <span class="mono">{{ result.trace_id[:12] }}</span>.{% endif %}
     </div>
 
