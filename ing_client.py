@@ -75,7 +75,7 @@ _AIS_SCOPES = "payment-accounts:transactions:view payment-accounts:balances:view
 
 _DEFAULT_HTTP_TIMEOUT   = 15
 _TOKEN_REFRESH_MARGIN_S = 30
-_TXN_LOOKBACK_DAYS      = 180
+_TXN_LOOKBACK_DAYS      = 89     # ING returns 403 beyond 90 days: PSD2 needs fresh SCA for older history
 
 # (access_token, expiry_epoch). Process-wide cache for the *app* token only.
 _app_token_cache: tuple[str, float] = ("", 0.0)
@@ -260,7 +260,14 @@ def exchange_code(code: str) -> str:
 # ── Data endpoints ───────────────────────────────────────────────────────────
 
 def get_accounts(customer_token: str) -> list:
-    return _call("GET", f"{BASE_URL}/v3/accounts", token=customer_token).get("accounts", [])
+    """Accounts in the shape db_utils expects. ING puts the holder name in
+    `name` and leaves `iban` empty on card accounts, which carry `maskedPan`."""
+    accounts = _call("GET", f"{BASE_URL}/v3/accounts", token=customer_token).get("accounts", [])
+    for a in accounts:
+        a.setdefault("ownerName", " ".join((a.get("name") or "").replace(" , ", ", ").split()))
+        if not a.get("iban") and a.get("maskedPan"):
+            a["iban"] = a["maskedPan"]
+    return accounts
 
 
 def get_balances(customer_token: str, account_id: str) -> list:
