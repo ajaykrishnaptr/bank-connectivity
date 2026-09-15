@@ -31,7 +31,7 @@ import os
 import uuid
 from collections import defaultdict
 from datetime import date, timedelta
-from statistics import mean
+from statistics import mean, median
 from urllib.parse import parse_qs, urlparse
 
 from dotenv import load_dotenv
@@ -82,6 +82,8 @@ _FIXED_AMOUNT_CV_THRESHOLD = 0.08   # coeff. of variation below which we call a 
 _PRICE_CREEP_PCT           = 5.0    # % rise from early to recent average that triggers a "price creep" alert
 _BURDEN_PCT_FLAGGED        = 20.0   # % of income going to fixed costs that flips burden from info → warning
 _LAPSE_WINDOW_DAYS         = 90     # window for adjacent-spend / lapse heuristics
+_USUAL_AMOUNT_BAND         = 0.20   # charges within ±20% of the median count as the usual amount
+_USUAL_AMOUNT_SHARE        = 0.75   # the usual amount must cover this share of charges to ignore the rest
 
 
 def _parse_date_range(req, default: str = "month") -> tuple[date, date]:
@@ -183,6 +185,14 @@ def _detect_recurring():
                 continue
 
             amounts = [abs(float(t.amount)) for t, _ in txns]
+            # A one-off extra charge at a subscription merchant (an in-app
+            # purchase, a gift card) should not turn the monthly charge into a
+            # "variable" one. When most charges sit near the median, judge the
+            # amount on those charges only.
+            usual_mid = median(amounts)
+            usual = [a for a in amounts if abs(a - usual_mid) <= _USUAL_AMOUNT_BAND * usual_mid]
+            if len(usual) >= _USUAL_AMOUNT_SHARE * len(amounts):
+                amounts = usual
             avg = sum(amounts) / len(amounts)
             # Coefficient of variation = stdev / mean. Small CV means
             # the amount barely changes (Netflix), large CV means it
@@ -214,6 +224,7 @@ def _detect_recurring():
                 "color":       BANK_COLORS.get(bank, "#95a5a6"),
                 "category":    last_t.category or "Other",
                 "avg_amount":  round(avg, 2),
+                "usual_mid":   usual_mid,
                 "currency":    currency,
                 "avg_eur":     round(currency_utils.to_eur(avg, currency, rates), 2),
                 "occurrences": len(txns),
@@ -314,18 +325,26 @@ def _detect_waste(fixed, all_recurring, income, all_txns):
             })
 
     # ── 2. Price creep ───────────────────────────────────────────────────────
-    # Compare the average of the first two charges vs. the last two; flag
-    # if it has crept up by more than _PRICE_CREEP_PCT. Need at least 4
-    # charges for early/recent to be meaningfully different windows.
+    # Compare the earliest charges with the latest; flag if the price stepped
+    # up by more than _PRICE_CREEP_PCT. Need at least 4 charges.
     for r in fixed:
         if r["category"] not in _PRICE_CREEP_CATEGORIES:
             continue
-        charges = sorted(merchant_charges.get(r["merchant"], []), key=lambda x: x[0])
+        # Compare only charges near the usual amount, so a one-off extra
+        # purchase does not read as a price rise.
+        band = _USUAL_AMOUNT_BAND * r["usual_mid"]
+        charges = sorted((c for c in merchant_charges.get(r["merchant"], []) if abs(c[1] - r["usual_mid"]) <= band),
+                         key=lambda x: x[0])
         if len(charges) < 4:
             continue
-        early_avg  = mean(amt for _, amt in charges[:2])
-        recent_avg = mean(amt for _, amt in charges[-2:])
-        if early_avg > 0:
+        # Compare the earliest and latest 3 charges (2 when history is short).
+        # A price rise is a step up: every recent charge above every early one.
+        # Without that, a bill that varies by a few percent each month reads as a rise.
+        n = 3 if len(charges) >= 6 else 2
+        early, recent = [amt for _, amt in charges[:n]], [amt for _, amt in charges[-n:]]
+        early_avg, recent_avg = mean(early), mean(recent)
+        stepped_up = min(recent) > max(early)
+        if early_avg > 0 and stepped_up:
             pct = (recent_avg - early_avg) / early_avg * 100
             if pct > _PRICE_CREEP_PCT:
                 signals.append({
