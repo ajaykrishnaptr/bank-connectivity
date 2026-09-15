@@ -137,7 +137,7 @@
             {{ acc.bank | upper }}</span></td>
           <td style="max-width:140px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:.8rem">
             {{ txn.creditor_name or txn.debtor_name or "—" }}</td>
-          <td class="text-muted" style="font-size:.75rem">{{ txn.category or "—" }}</td>
+          <td class="text-muted" style="font-size:.75rem">{% if txn.counterparty_iban and txn.counterparty_iban in own_ibans %}Own transfer{% else %}{{ txn.category or "—" }}{% endif %}</td>
           <td class="text-right fw-600 {% if txn.amount >= 0 %}text-green{% else %}text-red{% endif %}" style="font-size:.8rem">
             {{ txn.amount | money(txn.currency or acc.currency) }}</td>
         </tr>{% endfor %}

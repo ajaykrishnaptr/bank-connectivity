@@ -111,7 +111,8 @@ def _book(days: list[date], novel: float, hard: float, run_label: str,
         accts = sorted(accounts.get(cust.customer_id, []), key=lambda a: a.cash_account_type != "CACC")
         if not accts:
             continue
-        acct_dicts = [{"resource_id": a.resource_id, "currency": a.currency, "role": a.role} for a in accts]
+        acct_dicts = [{"resource_id": a.resource_id, "currency": a.currency, "role": a.role, "iban": a.iban}
+                      for a in accts]
         balances = {a.resource_id: Decimal(a.balance) for a in accts}
         plan = G.plan_for(cdict, cust.history_start)
         for day in days:

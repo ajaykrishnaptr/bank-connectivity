@@ -113,6 +113,8 @@ def get_transactions(consent_id: str, resource_id: str, date_from: date | None =
             "balanceAfterTransaction": {"balanceType": "closingBooked",
                                         "balanceAmount": _money(t.balance_after or 0, t.currency)},
         }
+        if t.counterparty_iban:
+            item["creditorAccount" if float(t.amount) < 0 else "debtorAccount"] = {"iban": t.counterparty_iban}
         for key, value in (("creditorName", t.creditor_name), ("debtorName", t.debtor_name),
                            ("purposeCode", t.purpose_code), ("endToEndId", t.end_to_end_id),
                            ("mandateId", t.mandate_id), ("creditorId", t.creditor_id)):

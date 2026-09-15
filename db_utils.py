@@ -37,6 +37,22 @@ def _parse_amount(s: Optional[str]) -> Optional[float]:
         return None
 
 
+def normalise_iban(iban: Optional[str]) -> str:
+    """IBAN without spaces, upper case; empty string for none."""
+    return "".join((iban or "").split()).upper()
+
+
+def own_ibans(user_id: int) -> set[str]:
+    """Normalised IBANs of every account this user has in FintNet."""
+    return {normalise_iban(a.iban) for a in Account.query.filter_by(user_id=user_id).all() if normalise_iban(a.iban)}
+
+
+def is_internal(txn: Transaction, own: set[str]) -> bool:
+    """True for a transfer between two of the user's own accounts: it moves
+    money, so it counts in balances but not in income or spending."""
+    return bool(txn.counterparty_iban) and txn.counterparty_iban in own
+
+
 def upsert_accounts(bank: str, account_list: list[dict], user_id: Optional[int] = None) -> list[Account]:
     """Insert new accounts or refresh existing ones, then return the ORM rows.
 
@@ -126,6 +142,8 @@ def upsert_transactions(bank: str, resource_id: str, txn_data: dict, user_id: Op
             # counterparty is the debtor — pick whichever is non-empty
             # so the categorizer has something to work with.
             merchant = creditor_name or t.get("debtorName", "")
+            other = t.get("creditorAccount") if (amount or 0) < 0 else t.get("debtorAccount")
+            counterparty_iban = normalise_iban((other or {}).get("iban")) or None
             category, source = decided.get(merchant or "", ("Transfers / Other", "rule"))
 
             db.session.add(Transaction(
@@ -138,6 +156,7 @@ def upsert_transactions(bank: str, resource_id: str, txn_data: dict, user_id: Op
                 creditor_name=creditor_name,
                 debtor_name=t.get("debtorName", ""),
                 remittance_info=t.get("remittanceInformationUnstructured", ""),
+                counterparty_iban=counterparty_iban,
                 status=status,
                 category=category,
                 category_source=source,

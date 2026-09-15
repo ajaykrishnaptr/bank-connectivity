@@ -300,7 +300,8 @@ def transactions_for_day(customer: dict, accounts: list[dict], plan: dict, day: 
         return cur_acct
 
     def add(account: dict, amount_eur: float, category: str, merchant: str, slice_: str, kind: str,
-            counterparty_is_creditor: bool, recurring: bool = False, purpose: str | None = None) -> None:
+            counterparty_is_creditor: bool, recurring: bool = False, purpose: str | None = None,
+            counterparty: dict | None = None) -> None:
         nonlocal seq
         amount = round(amount_eur * C.FX.get(account["currency"], 1.0), 2)
         mandate = f"MNDT{_num(customer['customer_id'] + merchant) % 10**8:08d}" if kind == "dd" else None
@@ -315,6 +316,7 @@ def transactions_for_day(customer: dict, accounts: list[dict], plan: dict, day: 
             "end_to_end_id": None if kind in ("card", "atm") else f"E2E{_ref(rng, 16)}",
             "mandate_id": mandate,
             "creditor_id": f"{country}98ZZZ{_num(merchant) % 10**11:011d}" if kind == "dd" else None,
+            "counterparty_iban": counterparty.get("iban") if counterparty else None,
             "feed_run": run_label,
         }
         label = {"transaction_id": tx["transaction_id"], "category": category,
@@ -336,8 +338,10 @@ def transactions_for_day(customer: dict, accounts: list[dict], plan: dict, day: 
         for role in ("spend", "daily"):
             if role in by_role:
                 amount = _TOP_UP_EUR[role]
-                add(cur_acct, -amount, "Transfers / Other", "Own account transfer", "seen", "transfer", True, True)
-                add(by_role[role], amount, "Transfers / Other", "Own account transfer", "seen", "transfer", False, True)
+                add(cur_acct, -amount, "Transfers / Other", "Own account transfer", "seen", "transfer", True, True,
+                    counterparty=by_role[role])
+                add(by_role[role], amount, "Transfers / Other", "Own account transfer", "seen", "transfer", False, True,
+                    counterparty=cur_acct)
 
     for r in plan["recurring"]:
         if day.day != min(r["day"], last):
@@ -347,8 +351,10 @@ def transactions_for_day(customer: dict, accounts: list[dict], plan: dict, day: 
             amount *= 1.15
         savings = by_role.get("savings")
         if r["kind"] == "savings" and savings is not None and savings is not cur_acct:
-            add(cur_acct, -amount, "Transfers / Other", "Savings transfer", "seen", "savings", True, True)
-            add(savings, amount, "Transfers / Other", "Savings transfer", "seen", "savings", False, True)
+            add(cur_acct, -amount, "Transfers / Other", "Savings transfer", "seen", "savings", True, True,
+                counterparty=savings)
+            add(savings, amount, "Transfers / Other", "Savings transfer", "seen", "savings", False, True,
+                counterparty=cur_acct)
             continue
         add(account_for(r["category"]), -amount, r["category"], r["merchant"], "seen", r["kind"], True, True)
 

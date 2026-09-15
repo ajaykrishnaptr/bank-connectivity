@@ -23,6 +23,7 @@ from datetime import date, timedelta
 from typing import Any, Callable
 
 import currency_utils
+import db_utils
 import llm
 import observability
 from models import Account, BankConnection, Transaction, db
@@ -45,6 +46,7 @@ Today is {today}. Connected banks: {banks}. Data covers {coverage}.
 Rules:
 - Every number in your answer must come from a tool result in this conversation. Never estimate, extrapolate or do arithmetic the tools did not return; if you need a figure, call a tool that returns it.
 - Amounts are in EUR unless a tool says otherwise. Say which period a figure covers.
+- Income and spending figures leave out transfers between the user's own accounts; they only move money between banks.
 - If the data does not cover the question (dates outside the coverage, a bank that is not connected), say so plainly.
 - Do not give credit, loan, creditworthiness or investment advice; say you can only describe their spending and income.
 - Answer in at most 5 short sentences or a short list. Name merchants, categories and banks as the tools return them.
@@ -105,9 +107,15 @@ class Tools:
         self.user_id = user_id
         self.recurring_fn = recurring_fn
         self.rates = currency_utils.get_rates("EUR")
-        self.rows = (db.session.query(Transaction, Account)
-                     .join(Account, Transaction.account_id == Account.id)
-                     .filter(Account.user_id == user_id, Transaction.status == "booked").all())
+        booked = (db.session.query(Transaction, Account)
+                  .join(Account, Transaction.account_id == Account.id)
+                  .filter(Account.user_id == user_id, Transaction.status == "booked").all())
+        own = db_utils.own_ibans(user_id)
+        # Figures leave out transfers between the user's own accounts; the
+        # transaction search still finds them, flagged.
+        self.all_rows = booked
+        self.rows = [(t, a) for t, a in booked if not db_utils.is_internal(t, own)]
+        self.own = own
 
     def _eur(self, t: Transaction, a: Account) -> float:
         return currency_utils.to_eur(float(t.amount or 0), t.currency or a.currency or "EUR", self.rates)
@@ -214,7 +222,8 @@ class Tools:
         d0, d1 = _d(date_from, date(2000, 1, 1)), _d(date_to, date.today())
         needle = (merchant_contains or "").lower()
         hits = []
-        for t, a in sorted(self._between(d0, d1), key=lambda x: x[0].booking_date, reverse=True):
+        in_range = [(t, a) for t, a in self.all_rows if t.booking_date and d0 <= t.booking_date <= d1]
+        for t, a in sorted(in_range, key=lambda x: x[0].booking_date, reverse=True):
             eur = self._eur(t, a)
             if category and t.category != category:
                 continue
@@ -226,7 +235,7 @@ class Tools:
                 continue
             hits.append({"date": str(t.booking_date), "bank": a.bank, "counterparty": t.creditor_name or t.debtor_name,
                          "category": t.category, "amount_native": float(t.amount or 0), "currency": t.currency,
-                         "amount_eur": round(eur, 2)})
+                         "amount_eur": round(eur, 2), "own_account_transfer": db_utils.is_internal(t, self.own)})
             if len(hits) >= max(1, min(int(limit or 15), 25)):
                 break
         return {"transactions": hits, "count_returned": len(hits)}

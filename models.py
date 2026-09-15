@@ -125,6 +125,10 @@ class Transaction(db.Model):
     category_source = db.Column(db.String(20))
     # The bank's own transactionId when it sends one; the dedup key.
     external_id     = db.Column(db.String(64), index=True)
+    # IBAN of the other side (creditorAccount on outgoing, debtorAccount on
+    # incoming). When it is one of the same user's accounts, the transaction is
+    # a transfer between their own accounts and stays out of income and spending.
+    counterparty_iban = db.Column(db.String(34))
     fetched_at      = db.Column(db.DateTime, default=_utc_now)
 
     account = db.relationship("Account", back_populates="transactions")
@@ -249,6 +253,7 @@ class SbTransaction(db.Model):
     end_to_end_id  = db.Column(db.String(40))
     mandate_id     = db.Column(db.String(40))
     creditor_id    = db.Column(db.String(40))
+    counterparty_iban = db.Column(db.String(34))   # set on transfers between the customer's own accounts
     balance_after  = db.Column(db.Numeric(18, 2))
     feed_run       = db.Column(db.String(20))   # "seed" or the ISO run date
 

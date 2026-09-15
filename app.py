@@ -166,13 +166,16 @@ def _detect_recurring():
     `all_txns` is exposed because the caller usually wants the raw
     transactions too and we'd rather not re-query the DB.
     """
-    all_txns = (
+    own = db_utils.own_ibans(current_user.id)
+    all_txns = [
+        (t, a) for t, a in
         db.session.query(Transaction, Account)
         .join(Account, Transaction.account_id == Account.id)
         .filter(Transaction.status == "booked",
                 Account.user_id == current_user.id)
         .all()
-    )
+        if not db_utils.is_internal(t, own)  # own-account transfers are neither expenses nor income
+    ]
 
     rates = currency_utils.get_rates("EUR")
 
@@ -563,11 +566,13 @@ with app.app_context():
     db.create_all()
     # create_all never alters existing tables: add columns introduced later.
     from sqlalchemy import inspect as _inspect, text as _text
-    _cols = {c["name"] for c in _inspect(db.engine).get_columns("sb_accounts")}
-    for _name, _ddl in (("bank", "VARCHAR(20)"), ("role", "VARCHAR(10) NOT NULL DEFAULT 'main'")):
-        if _name not in _cols:
+    for _table, _name, _ddl in (("sb_accounts", "bank", "VARCHAR(20)"),
+                                ("sb_accounts", "role", "VARCHAR(10) NOT NULL DEFAULT 'main'"),
+                                ("sb_transactions", "counterparty_iban", "VARCHAR(34)"),
+                                ("transactions", "counterparty_iban", "VARCHAR(34)")):
+        if _name not in {c["name"] for c in _inspect(db.engine).get_columns(_table)}:
             with db.engine.begin() as _conn:
-                _conn.execute(_text(f"ALTER TABLE sb_accounts ADD COLUMN {_name} {_ddl}"))
+                _conn.execute(_text(f"ALTER TABLE {_table} ADD COLUMN {_name} {_ddl}"))
 
 
 # ── DB-scoping helpers ───────────────────────────────────────────────────────
@@ -1022,7 +1027,11 @@ def dashboard():
 
     # Pull every booked txn once; we slice it locally for the two
     # windows. Cheaper than two SQL queries on the typical row count.
-    all_rows  = _txn_acct_query().filter(Transaction.status == "booked").all()
+    booked    = _txn_acct_query().filter(Transaction.status == "booked").all()
+    own_ibans = db_utils.own_ibans(current_user.id)
+    # Transfers between the user's own accounts stay out of every total below;
+    # the recent-transactions list still shows them, tagged.
+    all_rows  = [(t, a) for t, a in booked if not db_utils.is_internal(t, own_ibans)]
     all_banks = sorted(set(a.bank for _, a in all_rows))
     rates     = currency_utils.get_rates("EUR")
 
@@ -1114,7 +1123,7 @@ def dashboard():
     )[:10]
 
     recent = sorted(
-        [(t, a) for t, a in all_rows if t.booking_date],
+        [(t, a) for t, a in booked if t.booking_date],
         key=lambda x: x[0].booking_date, reverse=True
     )[:15]
 
@@ -1130,7 +1139,7 @@ def dashboard():
         bank_donut_values=[v for _, v in bank_spent_period],
         bank_donut_colors=[BANK_COLORS.get(b, "#95a5a6") for b, _ in bank_spent_period],
         month_labels=month_labels, monthly_by_bank=monthly_by_bank,
-        top_merchants=top_merchants, recent=recent,
+        top_merchants=top_merchants, recent=recent, own_ibans=own_ibans,
     )
 
 
@@ -1149,9 +1158,11 @@ def spending():
     prev_to     = date_from - timedelta(days=1)
     prev_from   = prev_to   - timedelta(days=period_days - 1)
 
+    own = db_utils.own_ibans(current_user.id)
+
     def _fetch(d0, d1):
-        """Outflow transactions in [d0, d1], joined with their account."""
-        return (
+        """Outflow transactions in [d0, d1], joined with their account, without own-account transfers."""
+        rows = (
             _txn_acct_query()
             .filter(Transaction.amount < 0,
                     Transaction.booking_date >= d0,
@@ -1159,6 +1170,7 @@ def spending():
             .order_by(Transaction.booking_date.desc())
             .all()
         )
+        return [(t, a) for t, a in rows if not db_utils.is_internal(t, own)]
 
     rows      = _fetch(date_from, date_to)
     prev_rows = _fetch(prev_from, prev_to)
