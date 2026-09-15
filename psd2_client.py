@@ -30,8 +30,9 @@ Identity threading:
   * Every request carries a fresh `X-Request-ID` UUID for tracing.
   * A `Consent-ID` header is added once we have one.
 """
-import os
 import logging
+import os
+import random
 import uuid
 from datetime import datetime, timedelta
 from urllib.parse import urlparse
@@ -45,10 +46,6 @@ load_dotenv()
 # tuple and presents it on every request below.
 CERT = (os.getenv("CERT_PATH", "certs/cert.pem"),
         os.getenv("KEY_PATH",  "certs/key.pem"))
-
-# Routable public IP; UniCredit sandbox rejects 127.0.0.1. In production
-# this should be the actual client IP from the inbound request.
-_PSU_IP_ADDRESS = os.getenv("UC_PSU_IP_ADDRESS", "1.1.1.1")
 
 # UniCredit subsidiary the request is routed to. "UI" = UniCredit Italia.
 # Other group entities (DE, AT, etc.) would use different codes.
@@ -74,6 +71,16 @@ class PSD2ApiError(Exception):
         self.status_code = status_code
 
 
+def _psu_ip_address() -> str:
+    """A random public-range IPv4 address for the PSU-IP-Address header.
+
+    The hosted demo has no real customer IP to forward, so each request gets
+    a fresh random one instead of a fixed placeholder.
+    """
+    first = random.choice([o for o in range(11, 224) if o not in (100, 127, 169, 172, 192, 198, 203)])
+    return f"{first}.{random.randint(0, 255)}.{random.randint(0, 255)}.{random.randint(1, 254)}"
+
+
 def _headers(base_url: str, consent_id: str | None = None) -> dict:
     """Request headers for UniCredit's Hydrogen sandbox.
 
@@ -84,7 +91,7 @@ def _headers(base_url: str, consent_id: str | None = None) -> dict:
     h = {
         "X-Request-ID":           str(uuid.uuid4()),
         "PSU-ID-Type":            "ALL",
-        "PSU-IP-Address":         _PSU_IP_ADDRESS,
+        "PSU-IP-Address":         _psu_ip_address(),
         "X-Country":              _X_COUNTRY,
         "X-Legal-Entity":         _X_LEGAL_ENTITY,
         "X-API-BaseContextURL":   base_url,
@@ -188,6 +195,13 @@ def get_accounts(base_url: str, consent_id: str) -> list:
     data = _call("GET", f"{base_url}/hydrogen/v1/accounts",
                  headers=_headers(base_url, consent_id))
     return data.get("accounts", [])
+
+
+def get_account_details(base_url: str, consent_id: str, account_id: str) -> dict:
+    """One account's details. UniCredit returns `ownerName` only here, not in the list."""
+    data = _call("GET", f"{base_url}/hydrogen/v1/accounts/{account_id}",
+                 headers=_headers(base_url, consent_id))
+    return data.get("account", data)
 
 
 def get_balances(base_url: str, consent_id: str, account_id: str) -> list:

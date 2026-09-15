@@ -649,6 +649,16 @@ def _fetch_and_store(bank: str, conn: BankConnection) -> None:
         account_list = synthbank_client.get_accounts(conn.consent_id)
     else:  # unicredit
         account_list = psd2_client.get_accounts(app.config["SANDBOX_BASE_URL"], conn.consent_id)
+        for a in account_list:
+            if a.get("ownerName") or not a.get("resourceId"):
+                continue
+            try:
+                details = psd2_client.get_account_details(app.config["SANDBOX_BASE_URL"], conn.consent_id, a["resourceId"])
+                a["ownerName"] = details.get("ownerName", "")
+            except psd2_client.PSD2ApiError as e:
+                log.warning("sync.owner_name.skipped", extra={
+                    "event": "sync.owner_name.skipped", "bank": bank, "account_id": a["resourceId"],
+                    "status_code": e.status_code, "reason": str(e)[:200]})
 
     saved = db_utils.upsert_accounts(bank, account_list, user_id=conn.user_id)
 
