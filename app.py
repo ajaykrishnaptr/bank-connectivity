@@ -739,6 +739,7 @@ def index():
         waste=waste,
         potential_savings=potential_savings,
         savings_breakdown=savings_breakdown,
+        sandbox_login=SANDBOX_LOGIN,
     )
 
 
@@ -784,13 +785,35 @@ def disconnect(bank):
 DEMO_PASSWORD = "TestPass123"
 # Each persona is the test user that exists in that bank's PSD2 sandbox, so the
 # sandbox SCA screen and the returned account owner match the login.
+# `sandbox` tells the viewer what the bank's own sandbox asks for at the
+# consent step, so nobody has to look it up on the bank's developer portal.
 DEMO_LOGIN = [
-    {"name": "Thomas Mann",   "email": "thomas.mann@example.de",  "banks": "Commerzbank sandbox · synthetic bank (EUR)"},
-    {"name": "Aino Salo",     "email": "aino.salo@example.fi",    "banks": "Nordea FI sandbox · synthetic bank (EUR)"},
-    {"name": "Margit Alros",  "email": "margit.alros@example.se", "banks": "Nordea SE sandbox · synthetic bank (SEK)"},
-    {"name": "A van Dijk",    "email": "a.vandijk@example.nl",    "banks": "ING NL sandbox · synthetic bank (EUR)"},
-    {"name": "Mario Rossi",   "email": "mario.rossi@example.it",  "banks": "UniCredit IT sandbox · synthetic bank (EUR)"},
+    {"name": "Thomas Mann",   "email": "thomas.mann@example.de",  "banks": "Commerzbank sandbox · synthetic bank (EUR)",
+     "sandbox": "Commerzbank PSU-ID DE80480800200405423400 · consent pre-approved"},
+    {"name": "Aino Salo",     "email": "aino.salo@example.fi",    "banks": "Nordea FI sandbox · synthetic bank (EUR)",
+     "sandbox": "Nordea FI · the sandbox approves the consent, no bank login"},
+    {"name": "Margit Alros",  "email": "margit.alros@example.se", "banks": "Nordea SE sandbox · synthetic bank (SEK)",
+     "sandbox": "Nordea SE · choose SE, the sandbox approves the consent"},
+    {"name": "A van Dijk",    "email": "a.vandijk@example.nl",    "banks": "ING NL sandbox · synthetic bank (EUR)",
+     "sandbox": "ING · pick profile \"Hr A van Dijk, Mw B Mol-van Dijk\""},
+    {"name": "Mario Rossi",   "email": "mario.rossi@example.it",  "banks": "UniCredit IT sandbox · synthetic bank (EUR)",
+     "sandbox": "UniCredit bank login · ituser2bgk / pwituser2bgk"},
 ]
+
+# What each bank's sandbox asks for at the consent step, shown on its Connect card.
+# `values` are (label, value) pairs with a copy button; `note` is the step to take.
+SANDBOX_LOGIN = {
+    "unicredit":   {"values": [("Username", "ituser2bgk"), ("Password", "pwituser2bgk")],
+                    "note": "Sign in on UniCredit's page, grant the consent, then press Proceed."},
+    "commerzbank": {"values": [("PSU-ID", "DE80480800200405423400")],
+                    "note": "The sandbox consent is pre-approved: press Authorize."},
+    "nordea":      {"values": [],
+                    "note": "No bank login: Nordea's sandbox approves the consent. Choose FI or SE."},
+    "ing":         {"values": [("Profile", "Hr A van Dijk, Mw B Mol-van Dijk")],
+                    "note": "Pick the profile on ING's page, then paste the code from the example.com address bar."},
+    "synthbank":   {"values": [],
+                    "note": "No bank login: approve on the simulated consent screen."},
+}
 
 
 @app.route("/login", methods=["GET", "POST"])

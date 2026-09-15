@@ -109,6 +109,7 @@
   .demo-chip:active { transform: scale(.99); }
   .demo-chip-name { font-size: .8125rem; font-weight: 600; color: #111827; }
   .demo-chip-banks { font-size: .7rem; color: #6b7280; }
+  .demo-chip-sandbox { font-size: .68rem; color: #4338ca; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
 </style>
 
 <div class="auth-wrap">
@@ -185,6 +186,7 @@
                     data-email="{{ u.email }}" data-pw="{{ demo_password }}">
               <span class="demo-chip-name">{{ u.name }}</span>
               <span class="demo-chip-banks">{{ u.banks }}</span>
+              <span class="demo-chip-sandbox">{{ u.sandbox }}</span>
             </button>
             {% endfor %}
           </div>

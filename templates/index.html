@@ -279,6 +279,26 @@
     </div>
   </div>
 
+  {% set sb = sandbox_login.get(bank_id) %}
+  {% if sb %}
+  <!-- Sandbox login: what the bank's sandbox asks for at the consent step -->
+  <div style="margin:0 1.5rem 1.125rem;padding:.7rem .8rem;border-radius:10px;
+    background:{{ color }}08;border:1px dashed {{ color }}40">
+    <div style="font-size:.6rem;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:{{ color }};margin-bottom:.35rem">Sandbox login</div>
+    {% for lbl, val in sb['values'] %}
+    <div style="display:flex;align-items:center;gap:.4rem;margin-bottom:.25rem;font-size:.72rem">
+      <span style="color:var(--text-3);min-width:4.2rem">{{ lbl }}</span>
+      <code style="font-size:.72rem;color:var(--text);background:var(--surface);border:1px solid var(--border);
+        border-radius:6px;padding:.05rem .35rem;user-select:all;overflow-wrap:anywhere">{{ val }}</code>
+      <button type="button" class="copy-btn" data-copy="{{ val }}" title="Copy"
+        style="font-size:.62rem;border:1px solid var(--border);background:var(--surface);color:var(--text-3);
+        border-radius:6px;padding:.05rem .4rem;cursor:pointer">Copy</button>
+    </div>
+    {% endfor %}
+    <div style="font-size:.7rem;color:var(--text-3);line-height:1.5">{{ sb['note'] }}</div>
+  </div>
+  {% endif %}
+
   <!-- Footer / CTA -->
   <div style="margin-top:auto;border-top:1px solid var(--border);padding:1.125rem 1.5rem;background:var(--surface-2)">
     {% if conn and conn.status == 'active' %}
@@ -361,4 +381,15 @@
   </div>
 </div>
 
+<script>
+  // Copy a sandbox credential from a bank card.
+  document.querySelectorAll('.copy-btn').forEach(function (btn) {
+    btn.addEventListener('click', function () {
+      navigator.clipboard.writeText(btn.dataset.copy).then(function () {
+        btn.textContent = 'Copied';
+        setTimeout(function () { btn.textContent = 'Copy'; }, 1200);
+      });
+    });
+  });
+</script>
 {% endblock %}
