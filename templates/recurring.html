@@ -111,7 +111,7 @@
         </span>
       </td>
       <td class="text-muted">{{ r.category }}</td>
-      <td class="text-right fw-600 text-red">{{ "%.2f" | format(r.avg_amount) }} €</td>
+      <td class="text-right fw-600 text-red">{{ r.avg_amount | money(r.currency) }}</td>
       <td class="text-right text-muted">{{ r.months }}</td>
       <td class="text-right text-muted">{{ r.occurrences }}</td>
       <td>
@@ -173,7 +173,7 @@
           <span class="dot" style="background:{{ r.color }}"></span>{{ r.bank | capitalize }}
         </span></td>
         <td class="text-muted">{{ r.category }}</td>
-        <td class="text-right fw-600 text-green">+{{ "%.2f" | format(r.avg_amount) }} €</td>
+        <td class="text-right fw-600 text-green">+{{ r.avg_amount | money(r.currency) }}</td>
         <td class="text-right text-muted">{{ r.months }}</td>
         <td>{% if r.is_fixed %}<span class="pill" style="background:#f0fdf4;color:#16a34a;border:1px solid #bbf7d0">Fixed</span>
             {% else %}<span class="pill" style="background:#fffbeb;color:#d97706;border:1px solid #fde68a">Variable</span>{% endif %}</td>

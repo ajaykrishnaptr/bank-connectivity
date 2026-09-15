@@ -35,7 +35,7 @@
   {% if dir == 'new' %}
     <span style="font-size:.7rem;padding:2px 7px;border-radius:10px;background:#eef2ff;color:var(--accent);font-weight:600">NEW</span>
   {% elif pct is not none %}
-    {% if (dir == 'up' and invert) or (dir == 'down' and not invert) %}
+    {% if (dir == 'up' and not invert) or (dir == 'down' and invert) %}
       {% set c = '#10b981' %}{% set bg = '#f0fdf4' %}
     {% else %}
       {% set c = '#ef4444' %}{% set bg = '#fef2f2' %}
@@ -78,9 +78,9 @@
     <div class="card-label">Net cashflow</div>
     <div style="display:flex;align-items:baseline;gap:.6rem">
       <div class="card-value {% if net >= 0 %}text-green{% else %}text-red{% endif %}">{{ "%.2f" | format(net) }} €</div>
-      {{ delta_badge(delta_net, invert=(net < 0)) }}
+      {{ delta_badge(delta_net) }}
     </div>
-    <div class="card-meta">{{ account_count }} accounts · {{ bank_month_summary | length }} banks</div>
+    <div class="card-meta">{{ account_count }} account{{ '' if account_count == 1 else 's' }} · {{ bank_count }} bank{{ '' if bank_count == 1 else 's' }}</div>
   </div>
 
 </div>
@@ -125,7 +125,7 @@
   <div class="card">
     <div class="card-section-title">Recent Transactions</div>
     <table>
-      <thead><tr><th>Date</th><th>Bank</th><th>Merchant</th><th>Cat.</th><th class="text-right">€</th></tr></thead>
+      <thead><tr><th>Date</th><th>Bank</th><th>Merchant</th><th>Cat.</th><th class="text-right">Amount</th></tr></thead>
       <tbody>
         {% for txn, acc in recent %}
         <tr>
@@ -139,7 +139,7 @@
             {{ txn.creditor_name or txn.debtor_name or "—" }}</td>
           <td class="text-muted" style="font-size:.75rem">{{ txn.category or "—" }}</td>
           <td class="text-right fw-600 {% if txn.amount >= 0 %}text-green{% else %}text-red{% endif %}" style="font-size:.8rem">
-            {{ "%.2f" | format(txn.amount) }}</td>
+            {{ txn.amount | money(txn.currency or acc.currency) }}</td>
         </tr>{% endfor %}
       </tbody>
     </table>

@@ -123,6 +123,18 @@ def _mom_delta(current: float, prev: float) -> tuple[float | None, str]:
     return pct, "up" if pct > 0 else "down"
 
 
+def _txn_currency(t, a) -> str:
+    """ISO currency of one transaction, falling back to its account, then EUR."""
+    return t.currency or a.currency or "EUR"
+
+
+def _money(amount, currency: str | None) -> str:
+    """Format an amount with its currency: "€12.30" for EUR, "SEK 12.30" otherwise."""
+    currency, value = currency or "EUR", float(amount)
+    sign = "-" if value < 0 else ""
+    return f"{sign}€{abs(value):.2f}" if currency == "EUR" else f"{sign}{currency} {abs(value):.2f}"
+
+
 def _detect_recurring():
     """Identify recurring expenses, recurring income, and return all
     booked transactions in a single pass.
@@ -147,18 +159,21 @@ def _detect_recurring():
         .all()
     )
 
+    rates = currency_utils.get_rates("EUR")
+
     def _grouped_by_sign(sign: int) -> list[dict]:
         # sign = -1 => only outflows (expenses)
         # sign = +1 => only inflows  (income)
-        by_merchant: dict[tuple[str, str], list] = defaultdict(list)
+        # Grouped per currency too, so an average never mixes SEK with EUR.
+        by_merchant: dict[tuple[str, str, str], list] = defaultdict(list)
         for t, a in all_txns:
             if (float(t.amount) < 0) == (sign < 0):
                 merchant = t.creditor_name or t.debtor_name or ""
                 if merchant:
-                    by_merchant[(merchant, a.bank)].append((t, a))
+                    by_merchant[(merchant, a.bank, _txn_currency(t, a))].append((t, a))
 
         results = []
-        for (merchant, bank), txns in by_merchant.items():
+        for (merchant, bank, currency), txns in by_merchant.items():
             # A transaction is "recurring" only if it shows up in at
             # least two distinct calendar months — otherwise it's a
             # one-off that happened twice in the same month.
@@ -199,6 +214,8 @@ def _detect_recurring():
                 "color":       BANK_COLORS.get(bank, "#95a5a6"),
                 "category":    last_t.category or "Other",
                 "avg_amount":  round(avg, 2),
+                "currency":    currency,
+                "avg_eur":     round(currency_utils.to_eur(avg, currency, rates), 2),
                 "occurrences": len(txns),
                 "months":      len(months),
                 "is_fixed":    cv < _FIXED_AMOUNT_CV_THRESHOLD,
@@ -207,7 +224,7 @@ def _detect_recurring():
             })
 
         # Most months seen first; ties broken by largest average.
-        return sorted(results, key=lambda x: (-x["months"], -x["avg_amount"]))
+        return sorted(results, key=lambda x: (-x["months"], -x["avg_eur"]))
 
     return _grouped_by_sign(-1), _grouped_by_sign(+1), all_txns
 
@@ -281,16 +298,18 @@ def _detect_waste(fixed, all_recurring, income, all_txns):
     for category_name, by_name in cat_groups.items():
         items = list(by_name.values())
         if len(items) >= 2:
-            total = round(sum(i["avg_amount"] for i in items), 2)
+            same_cur = len({i["currency"] for i in items}) == 1
+            total = round(sum(i["avg_amount"] if same_cur else i["avg_eur"] for i in items), 2)
             sorted_names = sorted(i["merchant"] for i in items)
             signals.append({
                 "type": "redundant", "severity": "warning",
                 "key": f"redundant:{category_name}:{','.join(sorted_names)}",
                 "category": category_name,
                 "services": [{"merchant": i["merchant"], "avg_amount": i["avg_amount"],
-                               "fmt": _fmt(i["avg_amount"], i["merchant"])} for i in items],
+                               "avg_eur": i["avg_eur"], "fmt": _money(i["avg_amount"], i["currency"])}
+                              for i in items],
                 "total_monthly": total,
-                "total_fmt": _fmt(total, items[0]["merchant"]),
+                "total_fmt": _money(total, items[0]["currency"] if same_cur else "EUR"),
                 "message": f"Are you actually using all {len(items)}? You're paying for {', '.join(i['merchant'] for i in items)} every month.",
             })
 
@@ -317,6 +336,8 @@ def _detect_waste(fixed, all_recurring, income, all_txns):
                     "recent_avg": round(recent_avg, 2),
                     "early_fmt": _fmt(early_avg, r["merchant"]),
                     "recent_fmt": _fmt(recent_avg, r["merchant"]),
+                    "crept_eur": round(currency_utils.to_eur(recent_avg - early_avg, r["currency"],
+                                                             currency_utils.get_rates("EUR")), 2),
                     "pct_increase": round(pct, 1),
                     "message": f"Did you notice {r['merchant']} raised their price? You were paying {_fmt(early_avg, r['merchant'])} — now it's {_fmt(recent_avg, r['merchant'])}.",
                 })
@@ -342,6 +363,7 @@ def _detect_waste(fixed, all_recurring, income, all_txns):
                 "merchant": sub["merchant"],
                 "reason": "transit_rideshare_overlap",
                 "subscription_monthly": sub["avg_amount"],
+                "subscription_monthly_eur": sub["avg_eur"],
                 "conflicting_count": len(rideshare_txns),
                 "conflicting_amount": rideshare_total,
                 "window_days": _LAPSE_WINDOW_DAYS,
@@ -369,6 +391,7 @@ def _detect_waste(fixed, all_recurring, income, all_txns):
                 "merchant": sub["merchant"],
                 "reason": "gym_no_adjacent_spend",
                 "subscription_monthly": sub["avg_amount"],
+                "subscription_monthly_eur": sub["avg_eur"],
                 "window_days": _LAPSE_WINDOW_DAYS,
                 "message": f"Your {sub['merchant']} membership is still charging. When did you last go?",
             })
@@ -376,18 +399,18 @@ def _detect_waste(fixed, all_recurring, income, all_txns):
     # ── 4. Subscription burden ───────────────────────────────────────────────
     # Same dedup trick as the redundancy signal: a sub appearing on two
     # bank accounts counts once.
-    unique_fixed  = {r["merchant"]: r["avg_amount"] for r in fixed}
-    unique_income = {r["merchant"]: r["avg_amount"] for r in income}
+    # One currency across fixed charges and income: show it natively.
+    # Mixed currencies: add them up in EUR, never SEK plus EUR.
+    burden_currencies = {r["currency"] for r in fixed + income}
+    native = len(burden_currencies) == 1
+    amount_key = "avg_amount" if native else "avg_eur"
+    unique_fixed  = {(r["merchant"], r["currency"]): r[amount_key] for r in fixed}
+    unique_income = {(r["merchant"], r["currency"]): r[amount_key] for r in income}
     monthly_fixed_total = round(sum(unique_fixed.values()), 2)
     monthly_income_avg  = round(sum(unique_income.values()), 2)
     if monthly_income_avg > 0:
         pct = round(monthly_fixed_total / monthly_income_avg * 100, 1)
-        # Pick the currency the user actually earns in for the message.
-        income_cur_counts: dict = defaultdict(int)
-        for t, a in all_txns:
-            if float(t.amount) > 0:
-                income_cur_counts[t.currency or a.currency or "EUR"] += 1
-        inc_cur = max(income_cur_counts, key=income_cur_counts.get) if income_cur_counts else "EUR"
+        inc_cur = next(iter(burden_currencies)) if native else "EUR"
         inc_sym = "€" if inc_cur == "EUR" else inc_cur + " "
         signals.append({
             "type": "burden",
@@ -414,8 +437,7 @@ def _total_potential_savings(signals):
       * lapse       → the full monthly cost of the likely-unused sub
       * burden      → excluded; it's a ratio, not a recoverable amount
 
-    Amounts are summed as EUR-equivalent (the demo/seed data is EUR);
-    a multi-currency build would convert via currency_utils first.
+    Amounts are converted to EUR before they are added up.
 
     Returns (total, breakdown) where breakdown maps signal type → € saved.
     """
@@ -423,15 +445,14 @@ def _total_potential_savings(signals):
     for s in signals:
         t = s.get("type")
         if t == "redundant":
-            amounts = [svc["avg_amount"] for svc in s.get("services", [])]
+            amounts = [svc["avg_eur"] for svc in s.get("services", [])]
             if len(amounts) >= 2:
                 # Keep the priciest, cancel the rest.
                 breakdown["redundant"] += sum(amounts) - max(amounts)
         elif t == "price_creep":
-            crept = (s.get("recent_avg", 0) or 0) - (s.get("early_avg", 0) or 0)
-            breakdown["price_creep"] += max(0.0, crept)
+            breakdown["price_creep"] += max(0.0, s.get("crept_eur", 0) or 0)
         elif t == "lapse":
-            breakdown["lapse"] += s.get("subscription_monthly", 0) or 0
+            breakdown["lapse"] += s.get("subscription_monthly_eur", 0) or 0
     total = round(sum(breakdown.values()), 2)
     return total, {k: round(v, 2) for k, v in breakdown.items()}
 
@@ -483,6 +504,9 @@ def load_user(user_id):
 # True on the hosted app (Vercel). Live sandbox connections work there too;
 # templates use it only to label the synthetic bank data honestly.
 IS_HOSTED = bool(os.getenv("VERCEL"))
+
+
+app.jinja_env.filters["money"] = _money
 
 
 @app.context_processor
@@ -887,6 +911,11 @@ def dashboard():
     # windows. Cheaper than two SQL queries on the typical row count.
     all_rows  = _txn_acct_query().filter(Transaction.status == "booked").all()
     all_banks = sorted(set(a.bank for _, a in all_rows))
+    rates     = currency_utils.get_rates("EUR")
+
+    def eur(t, a) -> float:
+        """The transaction amount in EUR, so SEK and EUR accounts add up."""
+        return currency_utils.to_eur(float(t.amount), _txn_currency(t, a), rates)
 
     def _in(t, d0, d1) -> bool:
         return t.booking_date and d0 <= t.booking_date <= d1
@@ -896,8 +925,8 @@ def dashboard():
 
     def _totals(rows) -> tuple[float, float]:
         """(spent, income) — both returned as positive floats."""
-        spent  = abs(sum(float(t.amount) for t, _ in rows if t.amount < 0))
-        income = sum(float(t.amount) for t, _ in rows if t.amount > 0)
+        spent  = abs(sum(eur(t, a) for t, a in rows if t.amount < 0))
+        income = sum(eur(t, a) for t, a in rows if t.amount > 0)
         return spent, income
 
     total_spent,  total_income  = _totals(period_rows)
@@ -911,9 +940,9 @@ def dashboard():
     bank_period = defaultdict(lambda: {"spent": 0.0, "income": 0.0})
     for t, a in period_rows:
         if t.amount < 0:
-            bank_period[a.bank]["spent"] += abs(float(t.amount))
+            bank_period[a.bank]["spent"] += abs(eur(t, a))
         else:
-            bank_period[a.bank]["income"] += float(t.amount)
+            bank_period[a.bank]["income"] += eur(t, a)
     bank_month_summary = [
         {"bank": b, "spent": round(v["spent"], 2), "income": round(v["income"], 2),
          "color": BANK_COLORS.get(b, "#95a5a6")}
@@ -921,9 +950,9 @@ def dashboard():
     ]
 
     cat_totals = defaultdict(float)
-    for t, _ in period_rows:
+    for t, a in period_rows:
         if t.amount < 0:
-            cat_totals[t.category or "Other"] += abs(float(t.amount))
+            cat_totals[t.category or "Other"] += abs(eur(t, a))
     cat_sorted = sorted(cat_totals.items(), key=lambda x: -x[1])
 
     bank_spent_period = sorted(
@@ -949,7 +978,7 @@ def dashboard():
     monthly_by_bank = [{
         "label": bank.capitalize(),
         "data": [round(abs(sum(
-            float(t.amount) for t, a in all_rows
+            eur(t, a) for t, a in all_rows
             if a.bank == bank and t.booking_date
             and t.booking_date.year == y and t.booking_date.month == m
             and t.amount < 0
@@ -963,7 +992,7 @@ def dashboard():
     for t, a in period_rows:
         if t.amount < 0:
             k = (t.creditor_name or t.debtor_name or "Unknown", a.bank)
-            merchant_key[k]["total"] += abs(float(t.amount))
+            merchant_key[k]["total"] += abs(eur(t, a))
             merchant_key[k]["bank"] = a.bank
     top_merchants = sorted(
         [{"name": k[0], "bank": k[1], "color": BANK_COLORS.get(k[1], "#95a5a6"),
@@ -981,7 +1010,7 @@ def dashboard():
         period_label=f"{date_from.strftime('%d %b')} – {date_to.strftime('%d %b %Y')}",
         total_spent=round(total_spent, 2), total_income=round(total_income, 2), net=round(net, 2),
         delta_spent=delta_spent, delta_income=delta_income, delta_net=delta_net,
-        account_count=_acct_query().count(),
+        account_count=_acct_query().count(), bank_count=len(all_banks),
         bank_month_summary=bank_month_summary,
         cat_labels=[c for c, _ in cat_sorted], cat_values=[round(v, 2) for _, v in cat_sorted],
         bank_donut_labels=[b for b, _ in bank_spent_period],
@@ -1021,6 +1050,10 @@ def spending():
     rows      = _fetch(date_from, date_to)
     prev_rows = _fetch(prev_from, prev_to)
     all_banks = sorted(set(a.bank for _, a in rows))
+    rates     = currency_utils.get_rates("EUR")
+
+    def eur(t, a) -> float:
+        return currency_utils.to_eur(float(t.amount), _txn_currency(t, a), rates)
 
     totals      = defaultdict(float)
     by_category = defaultdict(list)
@@ -1028,11 +1061,11 @@ def spending():
     prev_totals = defaultdict(float)
 
     for txn, acc in rows:
-        totals[txn.category]                += float(txn.amount)
+        totals[txn.category]                += eur(txn, acc)
         by_category[txn.category].append((txn, acc))
-        cat_by_bank[txn.category][acc.bank] += abs(float(txn.amount))
-    for txn, _ in prev_rows:
-        prev_totals[txn.category] += abs(float(txn.amount))
+        cat_by_bank[txn.category][acc.bank] += abs(eur(txn, acc))
+    for txn, acc in prev_rows:
+        prev_totals[txn.category] += abs(eur(txn, acc))
 
     sorted_totals = sorted(totals.items(), key=lambda x: x[1])
     categories    = [c for c, _ in sorted_totals]
@@ -1074,9 +1107,9 @@ def recurring():
     waste    = _detect_waste(fixed, expenses, income, all_txns)
     return render_template("recurring.html",
         fixed=fixed, variable=variable, income=income, waste=waste,
-        monthly_fixed=round(sum(r["avg_amount"] for r in fixed), 2),
-        monthly_all=round(sum(r["avg_amount"] for r in expenses), 2),
-        monthly_income=round(sum(r["avg_amount"] for r in income), 2),
+        monthly_fixed=round(sum(r["avg_eur"] for r in fixed), 2),
+        monthly_all=round(sum(r["avg_eur"] for r in expenses), 2),
+        monthly_income=round(sum(r["avg_eur"] for r in income), 2),
         bank_colors=BANK_COLORS,
     )
 
@@ -1314,7 +1347,8 @@ def _recurring_summary() -> dict:
 
     def slim(r):
         return {"merchant": r["merchant"], "bank": r["bank"], "category": r["category"],
-                "avg_amount": r["avg_amount"], "months_seen": r["months"],
+                "avg_amount": r["avg_amount"], "currency": r["currency"], "avg_eur": r["avg_eur"],
+                "months_seen": r["months"],
                 "last_date": str(r["last_date"]) if r["last_date"] else None,
                 "next_expected": str(r["next_date"]) if r["next_date"] else None}
 
@@ -1325,7 +1359,7 @@ def _recurring_summary() -> dict:
                                                               "recent_avg", "pct_increase", "total_monthly",
                                                               "monthly_fixed", "monthly_income", "pct")}
                         for s in signals],
-            "note": "avg_amount is in each account's native currency"}
+            "note": "avg_amount is in the currency named on each row; avg_eur is the EUR equivalent"}
 
 
 @app.route("/ask", methods=["GET", "POST"])

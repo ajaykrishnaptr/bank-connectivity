@@ -102,7 +102,7 @@
     </span>
   </summary>
   <table>
-    <thead><tr><th>Date</th><th>Bank</th><th>Account</th><th>Owner</th><th class="text-right">€</th><th>Merchant</th></tr></thead>
+    <thead><tr><th>Date</th><th>Bank</th><th>Account</th><th>Owner</th><th class="text-right">Amount</th><th>Merchant</th></tr></thead>
     <tbody>
       {% for txn, acc in by_category[category] %}
       <tr>
@@ -112,7 +112,7 @@
         </span></td>
         <td class="mono text-muted" style="font-size:.75rem">{{ acc.iban }}</td>
         <td>{{ acc.owner_name or "—" }}</td>
-        <td class="text-right text-red fw-600">{{ "%.2f" | format(txn.amount) }}</td>
+        <td class="text-right text-red fw-600">{{ txn.amount | money(txn.currency or acc.currency) }}</td>
         <td>{{ txn.creditor_name or txn.debtor_name or "—" }}</td>
       </tr>{% endfor %}
     </tbody>
