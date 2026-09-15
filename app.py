@@ -75,6 +75,19 @@ BANK_COLORS = {
     "synthbank":    "#6d28d9",
 }
 
+# Display names for the storage ids above; "ing".capitalize() would give "Ing".
+BANK_NAMES = {
+    "commerzbank": "Commerzbank",
+    "nordea":      "Nordea",
+    "unicredit":   "UniCredit",
+    "ing":         "ING",
+    "synthbank":   "Synthetic Bank",
+}
+
+
+def _bank_name(bank: str | None) -> str:
+    return BANK_NAMES.get(bank or "", (bank or "").capitalize())
+
 # Heuristic thresholds used by the analytics helpers. Tuning these
 # changes which alerts the dashboard surfaces — keep them named so
 # nobody has to guess what 0.08 means.
@@ -526,6 +539,7 @@ IS_HOSTED = bool(os.getenv("VERCEL"))
 
 
 app.jinja_env.filters["money"] = _money
+app.jinja_env.filters["bank_name"] = _bank_name
 
 
 @app.context_processor
@@ -747,7 +761,7 @@ def disconnect(bank):
         log.info("connection.disconnect", extra={
             "event": "connection.disconnect", "user_id": current_user.id, "bank": bank,
         })
-    flash(f"Disconnected from {bank.capitalize()}.", "info")
+    flash(f"Disconnected from {_bank_name(bank)}.", "info")
     return redirect(url_for("index"))
 
 
@@ -995,7 +1009,7 @@ def dashboard():
     # nested filtering — done in Python because months is a small list
     # and a SQL group-by would need bank-by-month aggregations.
     monthly_by_bank = [{
-        "label": bank.capitalize(),
+        "label": _bank_name(bank),
         "data": [round(abs(sum(
             eur(t, a) for t, a in all_rows
             if a.bank == bank and t.booking_date
@@ -1032,7 +1046,7 @@ def dashboard():
         account_count=_acct_query().count(), bank_count=len(all_banks),
         bank_month_summary=bank_month_summary,
         cat_labels=[c for c, _ in cat_sorted], cat_values=[round(v, 2) for _, v in cat_sorted],
-        bank_donut_labels=[b for b, _ in bank_spent_period],
+        bank_donut_labels=[_bank_name(b) for b, _ in bank_spent_period],
         bank_donut_values=[v for _, v in bank_spent_period],
         bank_donut_colors=[BANK_COLORS.get(b, "#95a5a6") for b, _ in bank_spent_period],
         month_labels=month_labels, monthly_by_bank=monthly_by_bank,
@@ -1090,7 +1104,7 @@ def spending():
     categories    = [c for c, _ in sorted_totals]
 
     grouped_datasets = [{
-        "label": b.capitalize(),
+        "label": _bank_name(b),
         "data": [round(cat_by_bank[c].get(b, 0), 2) for c in categories],
         "backgroundColor": BANK_COLORS.get(b, "#95a5a6") + "cc",
         "borderColor": BANK_COLORS.get(b, "#95a5a6"),
@@ -1439,7 +1453,7 @@ def balances(account_id):
     acc  = _owned_account(account_id)
     conn = _get_connection(acc.bank)
     if not conn:
-        flash(f"No active {acc.bank.capitalize()} connection.", "warning")
+        flash(f"No active {_bank_name(acc.bank)} connection.", "warning")
         return redirect(url_for("index"))
     try:
         if acc.bank == "commerzbank":
@@ -1472,7 +1486,7 @@ def transactions(account_id):
     acc  = _owned_account(account_id)
     conn = _get_connection(acc.bank)
     if not conn:
-        flash(f"No active {acc.bank.capitalize()} connection.", "warning")
+        flash(f"No active {_bank_name(acc.bank)} connection.", "warning")
         return redirect(url_for("index"))
     try:
         if acc.bank == "commerzbank":

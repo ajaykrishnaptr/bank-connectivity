@@ -107,7 +107,7 @@
       <td class="fw-600">{{ r.merchant }}</td>
       <td>
         <span class="pill" style="background:{{ r.color }}18;color:{{ r.color }};border:1px solid {{ r.color }}33">
-          <span class="dot" style="background:{{ r.color }}"></span>{{ r.bank | capitalize }}
+          <span class="dot" style="background:{{ r.color }}"></span>{{ r.bank | bank_name }}
         </span>
       </td>
       <td class="text-muted">{{ r.category }}</td>
@@ -170,7 +170,7 @@
       <tr>
         <td class="fw-600">{{ r.merchant }}</td>
         <td><span class="pill" style="background:{{ r.color }}18;color:{{ r.color }};border:1px solid {{ r.color }}33">
-          <span class="dot" style="background:{{ r.color }}"></span>{{ r.bank | capitalize }}
+          <span class="dot" style="background:{{ r.color }}"></span>{{ r.bank | bank_name }}
         </span></td>
         <td class="text-muted">{{ r.category }}</td>
         <td class="text-right fw-600 text-green">+{{ r.avg_amount | money(r.currency) }}</td>

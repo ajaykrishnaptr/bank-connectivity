@@ -333,7 +333,7 @@
       {% if session.bank %}
       <div class="nav-pill">
         <span class="dot"></span>
-        {{ session.bank | capitalize }}
+        {{ session.bank | bank_name }}
       </div>
       <a class="nav-btn-danger" href="{{ url_for('disconnect') }}">Disconnect</a>
       {% endif %}

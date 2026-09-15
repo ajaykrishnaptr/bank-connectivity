@@ -41,7 +41,7 @@
         {% for b in all_banks %}
         <th class="text-right">
           <span class="pill" style="background:{{ bank_colors.get(b,'#95a5a6') }}18;color:{{ bank_colors.get(b,'#95a5a6') }};border:1px solid {{ bank_colors.get(b,'#95a5a6') }}33">
-            <span class="dot" style="background:{{ bank_colors.get(b,'#95a5a6') }}"></span>{{ b | capitalize }}
+            <span class="dot" style="background:{{ bank_colors.get(b,'#95a5a6') }}"></span>{{ b | bank_name }}
           </span>
         </th>
         {% endfor %}
@@ -97,7 +97,7 @@
     <span style="margin-left:auto;display:flex;gap:.3rem;flex-wrap:wrap">
       {% for b, amt in cat_bank_rows[category] if amt > 0 %}
       <span class="pill" style="background:{{ bank_colors.get(b,'#95a5a6') }}18;color:{{ bank_colors.get(b,'#95a5a6') }};border:1px solid {{ bank_colors.get(b,'#95a5a6') }}33">
-        <span class="dot" style="background:{{ bank_colors.get(b,'#95a5a6') }}"></span>{{ b | capitalize }} {{ "%.0f" | format(amt) }}€
+        <span class="dot" style="background:{{ bank_colors.get(b,'#95a5a6') }}"></span>{{ b | bank_name }} {{ "%.0f" | format(amt) }}€
       </span>{% endfor %}
     </span>
   </summary>

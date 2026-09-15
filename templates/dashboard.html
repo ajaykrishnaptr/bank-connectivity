@@ -55,7 +55,7 @@
     <div class="card-meta" style="margin-top:.75rem;display:flex;flex-wrap:wrap;gap:.3rem">
       {% for b in bank_month_summary if b.spent > 0 %}
       <span class="pill" style="background:{{ b.color }}18;color:{{ b.color }};border:1px solid {{ b.color }}33">
-        <span class="dot" style="background:{{ b.color }}"></span>{{ b.bank | capitalize }} {{ "%.0f" | format(b.spent) }}€
+        <span class="dot" style="background:{{ b.color }}"></span>{{ b.bank | bank_name }} {{ "%.0f" | format(b.spent) }}€
       </span>{% endfor %}
     </div>
   </div>
@@ -69,7 +69,7 @@
     <div class="card-meta" style="margin-top:.75rem;display:flex;flex-wrap:wrap;gap:.3rem">
       {% for b in bank_month_summary if b.income > 0 %}
       <span class="pill" style="background:{{ b.color }}18;color:{{ b.color }};border:1px solid {{ b.color }}33">
-        <span class="dot" style="background:{{ b.color }}"></span>{{ b.bank | capitalize }} {{ "%.0f" | format(b.income) }}€
+        <span class="dot" style="background:{{ b.color }}"></span>{{ b.bank | bank_name }} {{ "%.0f" | format(b.income) }}€
       </span>{% endfor %}
     </div>
   </div>
@@ -115,7 +115,7 @@
           <td class="text-muted">{{ loop.index }}</td>
           <td class="fw-600">{{ m.name }}</td>
           <td><span class="pill" style="background:{{ m.color }}18;color:{{ m.color }};border:1px solid {{ m.color }}33">
-            <span class="dot" style="background:{{ m.color }}"></span>{{ m.bank | capitalize }}
+            <span class="dot" style="background:{{ m.color }}"></span>{{ m.bank | bank_name }}
           </span></td>
           <td class="text-right text-red fw-600">{{ "%.2f" | format(m.total) }}</td>
         </tr>{% endfor %}
