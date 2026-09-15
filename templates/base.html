@@ -323,6 +323,8 @@
       <a href="{{ url_for('aggregation') }}" {% if request.endpoint == 'aggregation' %}class="active"{% endif %}>Balances</a>
       <a href="{{ url_for('spending') }}" {% if request.endpoint == 'spending' %}class="active"{% endif %}>Spending</a>
       <a href="{{ url_for('recurring') }}" {% if request.endpoint == 'recurring' %}class="active"{% endif %}>Recurring</a>
+      <a href="{{ url_for('ask') }}" {% if request.endpoint == 'ask' %}class="active"{% endif %}>Ask</a>
+      <a href="{{ url_for('ops') }}" {% if request.endpoint == 'ops' %}class="active"{% endif %}>Ops</a>
       <a href="{{ url_for('index') }}" {% if request.endpoint == 'index' %}class="active"{% endif %}>Connect</a>
     </div>
     {% endif %}

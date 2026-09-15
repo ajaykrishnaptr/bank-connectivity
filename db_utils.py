@@ -16,7 +16,7 @@ from __future__ import annotations
 from datetime import date
 from typing import Optional
 
-from categorize import categorize
+from categorize import categorize_many
 from models import Account, Transaction, db
 
 
@@ -40,8 +40,9 @@ def _parse_amount(s: Optional[str]) -> Optional[float]:
 def upsert_accounts(bank: str, account_list: list[dict], user_id: Optional[int] = None) -> list[Account]:
     """Insert new accounts or refresh existing ones, then return the ORM rows.
 
-    Identity is `(bank, resource_id)` — `resource_id` is whatever the
-    bank's API uses to refer to the account internally. We store every
+    Identity is `(user_id, bank, resource_id)` — `resource_id` is whatever
+    the bank's API uses to refer to the account internally. Scoping by user
+    lets two demo users connect the same sandbox identity. We store every
     other field verbatim and overwrite on each call so renames at the
     bank propagate without manual intervention.
 
@@ -54,7 +55,7 @@ def upsert_accounts(bank: str, account_list: list[dict], user_id: Optional[int] 
         if not resource_id:
             continue
 
-        acc = Account.query.filter_by(bank=bank, resource_id=resource_id).first()
+        acc = Account.query.filter_by(user_id=user_id, bank=bank, resource_id=resource_id).first()
         if acc is None:
             acc = Account(bank=bank, resource_id=resource_id, user_id=user_id)
             db.session.add(acc)
@@ -69,47 +70,63 @@ def upsert_accounts(bank: str, account_list: list[dict], user_id: Optional[int] 
     return saved
 
 
-def upsert_transactions(bank: str, resource_id: str, txn_data: dict) -> None:
+def upsert_transactions(bank: str, resource_id: str, txn_data: dict, user_id: Optional[int] = None) -> int:
     """Insert booked + pending transactions for one account, skipping duplicates.
 
     `txn_data` is the normalised payload from a bank client and has the
-    shape `{"booked": [...], "pending": [...]}`. We look up the parent
-    Account by `(bank, resource_id)`; if it doesn't exist yet (caller
-    didn't run upsert_accounts first), we silently no-op rather than
-    creating an orphan transaction.
+    shape `{"booked": [...], "pending": [...]}`. The parent Account is looked
+    up by `(user_id, bank, resource_id)`; if it doesn't exist yet we no-op
+    rather than creating an orphan transaction.
 
-    The dedup key is `(booking_date, amount, creditor_name, status)`.
-    That can theoretically collide — two genuine identical-amount
-    payments to the same merchant on the same day get coalesced into
-    one row — but in practice it's rare enough, and the alternative
-    (using the bank's transaction ID) is unreliable across re-fetches
-    for some PSD2 sandboxes.
+    Dedup key: the bank's `transactionId` when it sends one (stored as
+    `external_id`), else `(booking_date, amount, creditor_name, status)`.
+    The fallback can coalesce two genuine identical payments on the same day,
+    which some PSD2 sandboxes force because their IDs change between fetches.
+
+    Categories come from overrides, cache or rules only; rule answers are
+    marked provisional and upgraded by the model in the categorise cron job.
+    Returns the number of rows inserted.
     """
-    acc = Account.query.filter_by(bank=bank, resource_id=resource_id).first()
+    q = Account.query.filter_by(bank=bank, resource_id=resource_id)
+    if user_id is not None:
+        q = q.filter_by(user_id=user_id)
+    acc = q.first()
     if acc is None:
-        return
+        return 0
 
-    existing = {
-        (t.booking_date, t.amount, t.creditor_name, t.status)
+    existing_ids = {t.external_id for t in acc.transactions if t.external_id}
+    existing_keys = {
+        (t.booking_date, float(t.amount) if t.amount is not None else None, t.creditor_name, t.status)
         for t in acc.transactions
     }
 
+    decided = categorize_many([t.get("creditorName") or t.get("debtorName") or ""
+                               for group in ("booked", "pending") for t in txn_data.get(group, [])])
+
+    inserted = 0
     for status, txns in (("booked", txn_data.get("booked", [])),
                          ("pending", txn_data.get("pending", []))):
         for t in txns:
             booking_date  = _parse_date(t.get("bookingDate"))
             amount        = _parse_amount(t.get("transactionAmount", {}).get("amount"))
             creditor_name = t.get("creditorName", "")
+            external_id   = (t.get("transactionId") or "")[:64] or None
 
-            key = (booking_date, amount, creditor_name, status)
-            if key in existing:
-                continue
-            existing.add(key)
+            if external_id:
+                if external_id in existing_ids:
+                    continue
+                existing_ids.add(external_id)
+            else:
+                key = (booking_date, amount, creditor_name, status)
+                if key in existing_keys:
+                    continue
+                existing_keys.add(key)
 
             # For inbound transactions creditor is empty and the
             # counterparty is the debtor — pick whichever is non-empty
             # so the categorizer has something to work with.
             merchant = creditor_name or t.get("debtorName", "")
+            category, source = decided.get(merchant or "", ("Transfers / Other", "rule"))
 
             db.session.add(Transaction(
                 bank=bank,
@@ -122,6 +139,10 @@ def upsert_transactions(bank: str, resource_id: str, txn_data: dict) -> None:
                 debtor_name=t.get("debtorName", ""),
                 remittance_info=t.get("remittanceInformationUnstructured", ""),
                 status=status,
-                category=categorize(merchant),
+                category=category,
+                category_source=source,
+                external_id=external_id,
             ))
+            inserted += 1
     db.session.commit()
+    return inserted

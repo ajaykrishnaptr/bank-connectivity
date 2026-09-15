@@ -9,22 +9,30 @@ A short tour, in dependency order:
 
     MerchantCategory              (standalone cache, no FK)
 
+    Synthetic bank (PSD2 AIS test data, see synthbank/):
+    SbCustomer ──< SbAccount ──< SbTransaction ── SbLabel
+    SbLabel holds the ground-truth category. It is the label firewall:
+    only the evaluation job reads it; no API, tool or model ever does.
+
+    JobRun                        (one row per cron job per day)
+
 * `User` is a person logging into the app. Every other table that holds
   personal data hangs off this row, so deleting a user can cascade.
 * `BankConnection` is a per-user PSD2 grant: an OAuth access token
-  (Nordea, ING) or a `consent_id` (Commerzbank, UniCredit, Deutsche Bank).
+  (Nordea, ING) or a `consent_id` (Commerzbank, UniCredit, synthetic bank).
   Both columns are nullable because each bank uses only one of them.
-* `Account` is a single bank account — current, savings, etc. The pair
-  `(bank, resource_id)` is unique so the same account is never inserted
-  twice when we re-fetch from the bank.
+* `Account` is a single bank account — current, savings, etc. The triple
+  `(user_id, bank, resource_id)` is unique so the same account is never
+  inserted twice for a user, while two demo users may connect the same
+  sandbox identity.
 * `Transaction` is one statement line. The dedup logic lives in
   db_utils.upsert_transactions; this table itself does not enforce it
   because near-duplicates with different remittance text are legal.
 * `DismissedAlert` records which dashboard alerts a user has hidden so
   we don't keep showing them.
-* `MerchantCategory` is the LLM-result cache: once we ask Ollama to
-  categorise "Lieferando", the answer is stored here forever and we
-  never spend tokens on that merchant again.
+* `MerchantCategory` is the model-result cache, keyed on the normalised
+  merchant name: once the model categorises "Lieferando", the answer is
+  stored here and we never spend tokens on that merchant again.
 """
 from datetime import datetime, timezone
 
@@ -82,7 +90,7 @@ class Account(db.Model):
     user_id     = db.Column(db.Integer, db.ForeignKey("users.id"), nullable=True)
 
     __table_args__ = (
-        db.UniqueConstraint("bank", "resource_id", name="uq_account_bank_resource"),
+        db.UniqueConstraint("user_id", "bank", "resource_id", name="uq_account_user_bank_resource"),
     )
 
     transactions = db.relationship("Transaction", back_populates="account",
@@ -112,6 +120,11 @@ class Transaction(db.Model):
     remittance_info = db.Column(db.Text)
     status          = db.Column(db.String(20))  # 'booked' | 'pending'
     category        = db.Column(db.String(50))
+    # Where the category came from: override | cache | model | rule.
+    # "rule" rows are provisional; the categorise cron upgrades them.
+    category_source = db.Column(db.String(20))
+    # The bank's own transactionId when it sends one; the dedup key.
+    external_id     = db.Column(db.String(64), index=True)
     fetched_at      = db.Column(db.DateTime, default=_utc_now)
 
     account = db.relationship("Account", back_populates="transactions")
@@ -144,9 +157,12 @@ class MerchantCategory(db.Model):
     __tablename__ = "merchant_categories"
 
     id         = db.Column(db.Integer, primary_key=True)
-    merchant   = db.Column(db.String(255), unique=True, nullable=False)
+    merchant   = db.Column(db.String(255), unique=True, nullable=False)  # normalised key
     category   = db.Column(db.String(50), nullable=False)
-    source     = db.Column(db.String(20), nullable=False, default="ai")  # "ai" | "rule"
+    source     = db.Column(db.String(20), nullable=False, default="model")  # "model" | "rule"
+    confidence = db.Column(db.Integer)          # 0-100, model answers only
+    reasoning  = db.Column(db.String(300))
+    model      = db.Column(db.String(60))
     created_at = db.Column(db.DateTime, default=_utc_now)
 
 
@@ -154,8 +170,8 @@ class BankConnection(db.Model):
     """A user's PSD2 grant for a single bank.
 
     Each bank uses one of two auth styles:
-      * `access_token` — OAuth bearer (Nordea, ING)
-      * `consent_id`   — explicit consent reference (Commerzbank, UniCredit, Deutsche Bank)
+          * `access_token` — OAuth bearer (Nordea, ING)
+      * `consent_id`   — explicit consent reference (Commerzbank, UniCredit, synthetic bank)
 
     Both columns are nullable; only the one relevant to that bank is set.
     `status` lets us mark a connection expired/revoked without deleting
@@ -167,7 +183,7 @@ class BankConnection(db.Model):
     user_id      = db.Column(db.Integer, db.ForeignKey("users.id"), nullable=False)
     bank         = db.Column(db.String(50), nullable=False)
     access_token = db.Column(db.Text, nullable=True)         # Nordea, ING
-    consent_id   = db.Column(db.String(255), nullable=True)  # Commerzbank, UniCredit, Deutsche Bank
+    consent_id   = db.Column(db.String(255), nullable=True)  # Commerzbank, UniCredit, synthetic bank
     status       = db.Column(db.String(20), nullable=False, default="active")  # active | expired | revoked
     connected_at = db.Column(db.DateTime, default=_utc_now)
 
@@ -175,4 +191,87 @@ class BankConnection(db.Model):
 
     __table_args__ = (
         db.UniqueConstraint("user_id", "bank", name="uq_user_bank"),
+    )
+
+
+# ── Synthetic bank ───────────────────────────────────────────────────────────
+# A PSD2 AIS test bank with 13 months of rolling history and a daily feed.
+# Shapes follow Berlin Group NextGenPSD2 field names so the synthetic bank
+# client returns exactly what a real ASPSP returns.
+
+class SbCustomer(db.Model):
+    __tablename__ = "sb_customers"
+
+    customer_id = db.Column(db.String(32), primary_key=True)
+    name        = db.Column(db.String(120), nullable=False)
+    country     = db.Column(db.String(2), nullable=False)
+    persona     = db.Column(db.String(30), nullable=False)
+    # First day of generated history; anchors price-rise dates in the plan.
+    history_start = db.Column(db.Date, nullable=False)
+    # Set for the 5 demo logins, empty for the evaluation population.
+    demo_email  = db.Column(db.String(255), unique=True)
+    created_at  = db.Column(db.DateTime, default=_utc_now)
+
+
+class SbAccount(db.Model):
+    __tablename__ = "sb_accounts"
+
+    resource_id = db.Column(db.String(40), primary_key=True)
+    customer_id = db.Column(db.String(32), db.ForeignKey("sb_customers.customer_id"), nullable=False, index=True)
+    iban        = db.Column(db.String(34), nullable=False)
+    currency    = db.Column(db.String(3), nullable=False)
+    name        = db.Column(db.String(120))
+    product     = db.Column(db.String(60))
+    cash_account_type = db.Column(db.String(8), default="CACC")
+    balance     = db.Column(db.Numeric(18, 2), nullable=False, default=0)
+
+
+class SbTransaction(db.Model):
+    __tablename__ = "sb_transactions"
+
+    transaction_id = db.Column(db.String(40), primary_key=True)
+    resource_id    = db.Column(db.String(40), db.ForeignKey("sb_accounts.resource_id"), nullable=False, index=True)
+    customer_id    = db.Column(db.String(32), nullable=False, index=True)
+    booking_date   = db.Column(db.Date, nullable=False, index=True)
+    value_date     = db.Column(db.Date)
+    amount         = db.Column(db.Numeric(18, 2), nullable=False)
+    currency       = db.Column(db.String(3), nullable=False)
+    creditor_name  = db.Column(db.String(140))
+    debtor_name    = db.Column(db.String(140))
+    remittance     = db.Column(db.String(300))
+    bank_transaction_code = db.Column(db.String(24))
+    purpose_code   = db.Column(db.String(8))
+    end_to_end_id  = db.Column(db.String(40))
+    mandate_id     = db.Column(db.String(40))
+    creditor_id    = db.Column(db.String(40))
+    balance_after  = db.Column(db.Numeric(18, 2))
+    feed_run       = db.Column(db.String(20))   # "seed" or the ISO run date
+
+
+class SbLabel(db.Model):
+    """Ground truth. Read only by the evaluation job (label firewall)."""
+    __tablename__ = "sb_labels"
+
+    transaction_id = db.Column(db.String(40), db.ForeignKey("sb_transactions.transaction_id", ondelete="CASCADE"),
+                               primary_key=True)
+    category       = db.Column(db.String(50), nullable=False)
+    merchant       = db.Column(db.String(140))
+    slice          = db.Column(db.String(10), nullable=False)   # seen | novel | hard
+    is_recurring   = db.Column(db.Boolean, default=False)
+
+
+class JobRun(db.Model):
+    """One row per cron job per day; makes every job idempotent per date."""
+    __tablename__ = "job_runs"
+
+    id          = db.Column(db.Integer, primary_key=True)
+    job         = db.Column(db.String(30), nullable=False)
+    run_date    = db.Column(db.Date, nullable=False)
+    status      = db.Column(db.String(12), nullable=False, default="running")  # running | ok | warn | error
+    started_at  = db.Column(db.DateTime, default=_utc_now)
+    finished_at = db.Column(db.DateTime)
+    details     = db.Column(db.JSON)
+
+    __table_args__ = (
+        db.UniqueConstraint("job", "run_date", name="uq_job_run_date"),
     )

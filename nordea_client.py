@@ -103,7 +103,7 @@ def _call(method: str, url: str, **kwargs):
         raise NordeaApiError(f"Request failed: {e}")
 
 
-def initiate_authorize(redirect_uri: str) -> tuple[str, str]:
+def initiate_authorize(redirect_uri: str, country: str | None = None) -> tuple[str, str]:
     """Start Nordea's OAuth flow. Returns `(location_url, state)`.
 
     In sandbox the mock-authorizer auto-approves and Nordea returns a
@@ -121,7 +121,7 @@ def initiate_authorize(redirect_uri: str) -> tuple[str, str]:
             "client_id":     CLIENT_ID,
             "redirect_uri":  redirect_uri,
             "scope":         SCOPES,
-            "country":       COUNTRY,
+            "country":       (country or COUNTRY).upper(),
             "response_type": "code",
             "duration":      _AUTH_DURATION_S,
             "state":         state,
@@ -177,12 +177,15 @@ def get_accounts(token: str) -> list:
     """Return accounts in the Berlin-Group `{"resourceId", "iban", ...}` shape."""
     data = _call("GET", f"{BASE_URL}/accounts", headers=_headers(token))
     raw = data.get("response", {}).get("accounts", [])
+    # Nordea's sandbox puts the holder's name in `account_name` and leaves
+    # `name` empty (checked 15 Sep 2026: "Aino Salo", "Margit Alros"), so the
+    # owner falls back to `account_name` and the display name to the product.
     return [{
         "resourceId": acc.get("_id", ""),
         "iban":       _extract_iban(acc),
         "currency":   acc.get("currency", ""),
-        "name":       acc.get("account_name", acc.get("product", "")),
-        "ownerName":  acc.get("name", ""),
+        "name":       acc.get("product") or acc.get("account_type") or "Account",
+        "ownerName":  acc.get("name") or acc.get("account_name", ""),
     } for acc in raw]
 
 

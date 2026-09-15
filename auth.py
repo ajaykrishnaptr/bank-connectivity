@@ -5,7 +5,7 @@ The actual HTTP work is done by `psd2_client`. This module just owns
 the session-state side: it stashes the consentId on the way out and
 re-reads it when the user comes back from the bank's SCA page.
 """
-from flask import current_app, session
+from flask import current_app, session, url_for
 
 import psd2_client
 
@@ -18,6 +18,10 @@ def initiate_consent_flow() -> str:
     """
     base_url     = current_app.config["SANDBOX_BASE_URL"]
     redirect_uri = current_app.config["REDIRECT_URI"]
+    if redirect_uri == "auto":
+        # Follow the host the user is on (app.fintnet.ai or the vercel.app
+        # alias) so the session cookie survives the round trip through SCA.
+        redirect_uri = url_for("callback", _external=True, _scheme="https")
     data = psd2_client.create_consent(base_url, redirect_uri)
     session["consent_id"] = data["consentId"]
 

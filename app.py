@@ -13,9 +13,11 @@ Layout of this file (top to bottom):
      `_fetch_and_store` — these are bank-agnostic wrappers that the
      route handlers call after a successful OAuth/consent flow.
   6. Route handlers, grouped by area: home, auth, analytics
-     (aggregation/dashboard/spending/recurring), one section per bank
-     (UniCredit, Commerzbank, Nordea, Deutsche Bank, ING), and
-     per-account detail views.
+     (aggregation/dashboard/spending/recurring), the money-questions
+     assistant (/ask), operations (/ops), one section per bank
+     (UniCredit, Commerzbank, Nordea, ING, synthetic bank), and
+     per-account detail views. Cron jobs live in cron.py and the
+     synthetic bank's own API in synthbank/api.py.
 
 Things this file deliberately does NOT do:
   * Talk to bank APIs directly — each bank lives in its own *_client.py.
@@ -37,20 +39,29 @@ from flask import Flask, flash, redirect, render_template, request, session, url
 from flask_login import LoginManager, current_user, login_required, login_user, logout_user
 from werkzeug.security import check_password_hash, generate_password_hash
 
-# .env must be loaded before any module that reads env vars at import time.
+# .env must be loaded before any module that reads env vars at import time,
+# and certificates must be materialised before any bank client reads its
+# certificate paths (runtime_certs is a no-op without the *_B64 variables).
 load_dotenv()
+import runtime_certs  # noqa: E402,F401
 
-import auth
-import categorize as cat
-import commerzbank_client
-import currency_utils
-import db_utils
-import deutschebank_client
-import ing_client
-import nordea_client
-import psd2_client
-from logging_config import log
-from models import Account, BankConnection, DismissedAlert, Transaction, User, db
+import assistant  # noqa: E402
+import auth  # noqa: E402
+import categorize as cat  # noqa: E402
+import commerzbank_client  # noqa: E402
+import cron  # noqa: E402
+import currency_utils  # noqa: E402
+import db_utils  # noqa: E402
+import eventlog  # noqa: E402
+import ing_client  # noqa: E402
+import llm  # noqa: E402
+import nordea_client  # noqa: E402
+import psd2_client  # noqa: E402
+import synthbank_client  # noqa: E402
+from logging_config import log  # noqa: E402
+from models import Account, BankConnection, DismissedAlert, JobRun, Transaction, User, db  # noqa: E402
+from synthbank import api as synthbank_api  # noqa: E402
+from synthbank import store as synthbank_store  # noqa: E402
 
 # Brand colour per bank. Used for chart bars, donut slices, and the
 # coloured pill next to merchant names on the dashboard. Adding a new
@@ -60,8 +71,8 @@ BANK_COLORS = {
     "commerzbank":  "#e67e22",
     "nordea":       "#3498db",
     "unicredit":    "#c0392b",
-    "deutschebank": "#0018a8",
     "ing":          "#FF6200",
+    "synthbank":    "#6d28d9",
 }
 
 # Heuristic thresholds used by the analytics helpers. Tuning these
@@ -267,15 +278,15 @@ def _detect_waste(fixed, all_recurring, income, all_txns):
             existing = cat_groups[r["category"]].get(name)
             if existing is None or r["avg_amount"] > existing["avg_amount"]:
                 cat_groups[r["category"]][name] = r
-    for cat, by_name in cat_groups.items():
+    for category_name, by_name in cat_groups.items():
         items = list(by_name.values())
         if len(items) >= 2:
             total = round(sum(i["avg_amount"] for i in items), 2)
             sorted_names = sorted(i["merchant"] for i in items)
             signals.append({
                 "type": "redundant", "severity": "warning",
-                "key": f"redundant:{cat}:{','.join(sorted_names)}",
-                "category": cat,
+                "key": f"redundant:{category_name}:{','.join(sorted_names)}",
+                "category": category_name,
                 "services": [{"merchant": i["merchant"], "avg_amount": i["avg_amount"],
                                "fmt": _fmt(i["avg_amount"], i["merchant"])} for i in items],
                 "total_monthly": total,
@@ -431,20 +442,32 @@ def _total_potential_savings(signals):
 # query parameters and we want one handler per bank to keep things
 # clear. Defaults are localhost so a fresh checkout runs without env vars.
 app = Flask(__name__)
+# A fixed secret is required on Vercel: login and OAuth state cookies must be
+# valid on every function instance, and synthetic bank consents are signed with it.
+if os.getenv("VERCEL") and not os.getenv("FLASK_SECRET_KEY"):
+    raise RuntimeError("FLASK_SECRET_KEY must be set on Vercel")
 app.secret_key = os.getenv("FLASK_SECRET_KEY", "dev-secret")
+app.config["SESSION_COOKIE_SECURE"] = bool(os.getenv("VERCEL"))
+app.config["SESSION_COOKIE_SAMESITE"] = "Lax"
 app.config["SANDBOX_BASE_URL"]        = os.getenv("SANDBOX_BASE_URL",     "https://api-sandbox.unicredit.it")
 app.config["REDIRECT_URI"]            = os.getenv("REDIRECT_URI",        "http://localhost:5000/callback")
 app.config["CB_REDIRECT_URI"]         = os.getenv("CB_REDIRECT_URI",     "http://localhost:5000/commerzbank/callback")
 app.config["NORDEA_REDIRECT_URI"]     = os.getenv("NORDEA_REDIRECT_URI", "http://localhost:5000/nordea/callback")
-app.config["DB_REDIRECT_URI"]         = os.getenv("DB_REDIRECT_URI",     "http://localhost:5000/deutschebank/callback")
 app.config["ING_REDIRECT_URI"]        = os.getenv("ING_REDIRECT_URI",    "http://localhost:5000/ing/callback")
 # On Vercel (and other serverless hosts) the project directory is
 # read-only — only /tmp is writable — so the SQLite file has to live
 # there. Locally we keep the default instance-folder DB. DATABASE_URL
 # overrides both.
 _default_db = "sqlite:////tmp/ais.db" if os.getenv("VERCEL") else "sqlite:///ais.db"
-app.config["SQLALCHEMY_DATABASE_URI"] = os.getenv("DATABASE_URL",        _default_db)
+_db_url = os.getenv("DATABASE_URL") or os.getenv("POSTGRES_URL") or _default_db
+# Neon hands out postgres:// or postgresql:// URLs; SQLAlchemy needs the
+# psycopg 3 driver named explicitly.
+if _db_url.startswith(("postgres://", "postgresql://")):
+    _db_url = "postgresql+psycopg://" + _db_url.split("://", 1)[1]
+app.config["SQLALCHEMY_DATABASE_URI"] = _db_url
 app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
+# Serverless Postgres drops idle connections; check before use.
+app.config["SQLALCHEMY_ENGINE_OPTIONS"] = {"pool_pre_ping": True, "pool_recycle": 280}
 
 db.init_app(app)
 
@@ -457,16 +480,18 @@ def load_user(user_id):
     return User.query.get(int(user_id))
 
 
-# True on the hosted demo (Vercel), where live bank connect flows can't
-# run — there are no sandbox certs/credentials in the serverless env.
-# Templates use this to show a "demo only" disclaimer. Exposed to every
-# template so any page can read `is_demo` without threading it through.
-IS_DEMO = bool(os.getenv("VERCEL"))
+# True on the hosted app (Vercel). Live sandbox connections work there too;
+# templates use it only to label the synthetic bank data honestly.
+IS_HOSTED = bool(os.getenv("VERCEL"))
 
 
 @app.context_processor
-def inject_is_demo():
-    return {"is_demo": IS_DEMO}
+def inject_flags():
+    return {"is_hosted": IS_HOSTED, "assistant_enabled": llm.available()}
+
+
+app.register_blueprint(cron.bp)
+app.register_blueprint(synthbank_api.bp)
 
 
 # ── One-shot schema init + migration (runs at import time) ───────────────────
@@ -478,34 +503,6 @@ def inject_is_demo():
 # should move into the migration scripts.
 with app.app_context():
     db.create_all()
-
-    # SQLite: add user_id column to accounts if missing.
-    with db.engine.connect() as conn:
-        cols = [r[1] for r in conn.execute(db.text("PRAGMA table_info(accounts)")).fetchall()]
-        if "user_id" not in cols:
-            conn.execute(db.text("ALTER TABLE accounts ADD COLUMN user_id INTEGER REFERENCES users(id)"))
-            conn.commit()
-
-    # Backfill category for any rows that predate the column. Cheap
-    # because the cache + override layer handle most lookups instantly.
-    uncategorized = Transaction.query.filter(Transaction.category.is_(None)).all()
-    for t in uncategorized:
-        t.category = cat.categorize(t.creditor_name or t.debtor_name or "")
-    if uncategorized:
-        db.session.commit()
-
-    # Empty DB? Populate the demo personas so a fresh checkout — or a
-    # serverless cold start on Vercel, where /tmp begins empty — has
-    # something to show without anyone running `seed_data.py` by hand.
-    # `seed_data` is imported lazily here (not at the top of this file)
-    # because it does `from app import app`, which only resolves once
-    # `app` exists. The seed is deterministic and idempotent.
-    if User.query.count() == 0:
-        try:
-            import seed_data
-            seed_data.main()
-        except Exception as exc:  # never let seeding crash app startup
-            log.warning("seed.failed", extra={"event": "seed.failed", "error": str(exc)})
 
 
 # ── DB-scoping helpers ───────────────────────────────────────────────────────
@@ -589,11 +586,10 @@ def _fetch_and_store(bank: str, conn: BankConnection) -> None:
     elif bank == "commerzbank":
         token = commerzbank_client.get_oauth_token()
         account_list = commerzbank_client.get_accounts(token, conn.consent_id)
-    elif bank == "deutschebank":
-        token = deutschebank_client.get_oauth_token()
-        account_list = deutschebank_client.get_accounts(token, conn.consent_id)
     elif bank == "ing":
         account_list = ing_client.get_accounts(conn.access_token)
+    elif bank == "synthbank":
+        account_list = synthbank_client.get_accounts(conn.consent_id)
     else:  # unicredit
         account_list = psd2_client.get_accounts(app.config["SANDBOX_BASE_URL"], conn.consent_id)
 
@@ -605,9 +601,8 @@ def _fetch_and_store(bank: str, conn: BankConnection) -> None:
         elif bank == "commerzbank":
             token = commerzbank_client.get_oauth_token()
             txn_data = commerzbank_client.get_transactions(token, conn.consent_id, acc.resource_id)
-        elif bank == "deutschebank":
-            token = deutschebank_client.get_oauth_token()
-            txn_data = deutschebank_client.get_transactions(token, conn.consent_id, acc.resource_id)
+        elif bank == "synthbank":
+            txn_data = synthbank_client.get_transactions(conn.consent_id, acc.resource_id)
         elif bank == "ing":
             try:
                 txn_data = ing_client.get_transactions(conn.access_token, acc.resource_id)
@@ -621,7 +616,16 @@ def _fetch_and_store(bank: str, conn: BankConnection) -> None:
         else:
             txn_data = psd2_client.get_transactions(
                 app.config["SANDBOX_BASE_URL"], conn.consent_id, acc.resource_id)
-        db_utils.upsert_transactions(bank, acc.resource_id, txn_data)
+        db_utils.upsert_transactions(bank, acc.resource_id, txn_data, user_id=conn.user_id)
+
+    # Live sandbox data is small: let the model categorise a few new merchants
+    # straight away. The synthetic bank waits for the categorise cron job.
+    if bank != "synthbank" and llm.available():
+        try:
+            cat.upgrade_provisional(limit=int(os.getenv("SYNC_CATEGORISE_LIMIT", "10")))
+        except Exception as exc:  # noqa: BLE001 — categorisation must never break a sync
+            db.session.rollback()
+            log.warning("sync.categorise.failed", extra={"event": "sync.categorise.failed", "error": str(exc)[:200]})
 
     log.info("sync.complete", extra={
         "event": "sync.complete", "user_id": conn.user_id, "bank": bank,
@@ -711,12 +715,14 @@ def disconnect(bank):
 # Emails and the shared password must match what `seed_data.py` creates;
 # `banks` is just a human-readable label for the card.
 DEMO_PASSWORD = "TestPass123"
+# Each persona is the test user that exists in that bank's PSD2 sandbox, so the
+# sandbox SCA screen and the returned account owner match the login.
 DEMO_LOGIN = [
-    {"name": "Max Mustermann",  "email": "max.mustermann@example.de",   "banks": "Commerzbank · Deutsche Bank"},
-    {"name": "Anna Korhonen",   "email": "anna.korhonen@example.fi",    "banks": "Nordea (EUR)"},
-    {"name": "Sven Andersson",  "email": "sven.andersson@example.se",   "banks": "Nordea (SEK)"},
-    {"name": "Jan Jansen",      "email": "jan.jansen@example.nl",       "banks": "ING"},
-    {"name": "Mario Rossi",     "email": "mario.rossi@example.it",      "banks": "UniCredit"},
+    {"name": "Thomas Mann",   "email": "thomas.mann@example.de",  "banks": "Commerzbank sandbox · synthetic bank (EUR)"},
+    {"name": "Aino Salo",     "email": "aino.salo@example.fi",    "banks": "Nordea FI sandbox · synthetic bank (EUR)"},
+    {"name": "Margit Alros",  "email": "margit.alros@example.se", "banks": "Nordea SE sandbox · synthetic bank (SEK)"},
+    {"name": "A van Dijk",    "email": "a.vandijk@example.nl",    "banks": "ING NL sandbox · synthetic bank (EUR)"},
+    {"name": "Mario Rossi",   "email": "mario.rossi@example.it",  "banks": "UniCredit IT sandbox · synthetic bank (EUR)"},
 ]
 
 
@@ -1157,7 +1163,8 @@ def commerzbank_authorize():
 def nordea_connect():
     """Show the Nordea country picker. The actual OAuth dance starts
     when the user posts to /nordea/authorize."""
-    return render_template("nordea_consent.html", country=nordea_client.COUNTRY)
+    default = "SE" if (current_user.email or "").endswith(".se") else nordea_client.COUNTRY
+    return render_template("nordea_consent.html", country=default)
 
 
 @app.route("/nordea/authorize", methods=["POST"])
@@ -1173,7 +1180,8 @@ def nordea_authorize():
     """
     try:
         redirect_uri = app.config["NORDEA_REDIRECT_URI"]
-        location, state = nordea_client.initiate_authorize(redirect_uri)
+        country = request.form.get("country") if request.form.get("country") in ("FI", "SE", "DK", "NO") else None
+        location, state = nordea_client.initiate_authorize(redirect_uri, country)
         session["nordea_state"] = state
         params = parse_qs(urlparse(location).query)
         if "code" in params:
@@ -1205,59 +1213,6 @@ def nordea_callback():
         flash("Nordea connected. Accounts fetched.", "success")
         return redirect(url_for("dashboard"))
     except nordea_client.NordeaApiError as e:
-        flash(str(e), "error")
-        return redirect(url_for("index"))
-
-
-# ── Deutsche Bank (Berlin Group NextGenPSD2, OAuth2 + SCA redirect) ──────────
-
-@app.route("/deutschebank/connect")
-@login_required
-def deutschebank_connect():
-    """Create a Berlin-Group-style consent at Deutsche Bank and send
-    the user to its SCA redirect URL.
-
-    Two pre-conditions can fail and produce a useful error:
-      * the OAuth client credentials are wrong (caught by `get_oauth_token`)
-      * the consent response is missing `consentId` or `scaRedirect`
-        — usually a misconfigured DB_CLIENT_ID / DB_BASE_URL.
-    """
-    try:
-        token        = deutschebank_client.get_oauth_token()
-        redirect_uri = app.config["DB_REDIRECT_URI"]
-        consent      = deutschebank_client.create_consent(token, redirect_uri)
-        consent_id   = consent.get("consentId")
-        sca_url      = consent.get("_links", {}).get("scaRedirect", {}).get("href")
-        if not consent_id or not sca_url:
-            flash("Deutsche Bank consent creation failed — check DB_CLIENT_ID / DB_BASE_URL.", "error")
-            return redirect(url_for("index"))
-        session["db_consent_id"] = consent_id
-        return redirect(sca_url)
-    except deutschebank_client.DeutscheBankApiError as e:
-        flash(str(e), "error")
-        return redirect(url_for("index"))
-
-
-@app.route("/deutschebank/callback")
-@login_required
-def deutschebank_callback():
-    """User came back from DB's SCA page. We picked up `consent_id`
-    from the session (set in /deutschebank/connect); if it's missing
-    the session expired and the user has to start over."""
-    consent_id = session.pop("db_consent_id", None)
-    if not consent_id:
-        flash("Session expired. Please try connecting Deutsche Bank again.", "error")
-        return redirect(url_for("index"))
-    try:
-        token  = deutschebank_client.get_oauth_token()
-        status = deutschebank_client.get_consent_status(token, consent_id)
-        if status != "valid":
-            flash(f"Deutsche Bank consent not valid (status: {status}).", "warning")
-            return render_template("consent_pending.html", status=status)
-        _upsert_connection("deutschebank", consent_id=consent_id)
-        flash("Deutsche Bank connected. Accounts fetched.", "success")
-        return redirect(url_for("dashboard"))
-    except deutschebank_client.DeutscheBankApiError as e:
         flash(str(e), "error")
         return redirect(url_for("index"))
 
@@ -1312,7 +1267,113 @@ def ing_enter_code():
     return render_template("ing_code.html")
 
 
+# ── Synthetic bank (Berlin Group AIS test bank, simulated SCA) ───────────────
+
+@app.route("/synthbank/connect")
+@login_required
+def synthbank_connect():
+    """Create a consent for the logged-in demo user's synthetic bank customer
+    and send them to the simulated SCA screen."""
+    cust = synthbank_store.customer_for_email(current_user.email)
+    if cust is None:
+        flash("The synthetic bank only holds data for the demo logins.", "warning")
+        return redirect(url_for("index"))
+    consent = synthbank_client.create_consent(cust.customer_id)
+    return redirect(consent["_links"]["scaRedirect"]["href"])
+
+
+@app.route("/synthbank/callback", methods=["POST"])
+@login_required
+def synthbank_callback():
+    """The user approved the consent on the simulated SCA screen."""
+    consent_id = request.form.get("consent_id", "")
+    if request.form.get("decision") != "approve":
+        flash("Consent refused. Nothing was connected.", "info")
+        return redirect(url_for("index"))
+    try:
+        cid = synthbank_client.customer_id_for(consent_id)
+        cust = synthbank_store.customer_for_email(current_user.email)
+        if cust is None or cust.customer_id != cid:
+            flash("That consent belongs to a different customer.", "error")
+            return redirect(url_for("index"))
+        _upsert_connection("synthbank", consent_id=consent_id)
+        flash("Synthetic bank connected. 13 months of transactions fetched.", "success")
+        return redirect(url_for("dashboard"))
+    except synthbank_client.SynthBankError as e:
+        flash(str(e), "error")
+        return redirect(url_for("index"))
+
+
+# ── Money questions assistant ────────────────────────────────────────────────
+
+def _recurring_summary() -> dict:
+    """Recurring payments and wasted-spend signals for the assistant's tool."""
+    expenses, income, all_txns = _detect_recurring()
+    fixed = [r for r in expenses if r["is_fixed"]]
+    signals = _detect_waste(fixed, expenses, income, all_txns)
+
+    def slim(r):
+        return {"merchant": r["merchant"], "bank": r["bank"], "category": r["category"],
+                "avg_amount": r["avg_amount"], "months_seen": r["months"],
+                "last_date": str(r["last_date"]) if r["last_date"] else None,
+                "next_expected": str(r["next_date"]) if r["next_date"] else None}
+
+    return {"fixed_subscriptions": [slim(r) for r in fixed][:25],
+            "variable_recurring": [slim(r) for r in expenses if not r["is_fixed"]][:25],
+            "recurring_income": [slim(r) for r in income][:10],
+            "signals": [{k: v for k, v in s.items() if k in ("type", "merchant", "message", "early_avg",
+                                                              "recent_avg", "pct_increase", "total_monthly",
+                                                              "monthly_fixed", "monthly_income", "pct")}
+                        for s in signals],
+            "note": "avg_amount is in each account's native currency"}
+
+
+@app.route("/ask", methods=["GET", "POST"])
+@login_required
+def ask():
+    """Ask a question about money across every connected bank."""
+    result = None
+    question = ""
+    if request.method == "POST":
+        question = request.form.get("question", "").strip()
+        result = assistant.answer(question, current_user.id, _recurring_summary)
+        history = session.get("ask_history", [])
+        history.insert(0, {"q": question[:200], "a": (result.get("answer") or "")[:600]})
+        session["ask_history"] = history[:4]
+    examples = [
+        "How much did I spend on groceries last month across all my banks?",
+        "Why did my spending change last month compared with the month before?",
+        "Which subscriptions went up in price?",
+        "What were my top 5 merchants in the last 3 months?",
+        "How much income came in each month this year?",
+    ]
+    return render_template("ask.html", result=result, question=question, examples=examples,
+                           history=session.get("ask_history", [])[1 if result else 0:],
+                           model=llm.MODEL, usage=llm.usage())
+
+
+# ── Operations ───────────────────────────────────────────────────────────────
+
+@app.route("/ops")
+@login_required
+def ops():
+    """Cron runs, the latest categoriser evaluation, trust-chain health, model usage and recent events."""
+    runs = JobRun.query.order_by(JobRun.run_date.desc(), JobRun.job).limit(40).all()
+    latest = {job: JobRun.query.filter_by(job=job).order_by(JobRun.run_date.desc()).first()
+              for job in ("feed", "categorise", "evaluate", "health")}
+    evals = (JobRun.query.filter_by(job="evaluate").filter(JobRun.status.in_(["ok", "warn"]))
+             .order_by(JobRun.run_date.desc()).limit(14).all())
+    events = eventlog.read(40)
+    return render_template("ops.html", runs=runs, latest=latest, evals=evals, events=events,
+                           usage=llm.usage(), provider=cat.provider())
+
+
 # ── Account detail views (live API, DB-backed credentials) ───────────────────
+
+def _owned_account(resource_id: str) -> Account:
+    """The current user's account with this bank resource id, or 404."""
+    return Account.query.filter_by(user_id=current_user.id, resource_id=resource_id).first_or_404()
+
 
 @app.route("/accounts/<account_id>/balances")
 @login_required
@@ -1322,7 +1383,7 @@ def balances(account_id):
     Requires an active BankConnection for the parent account's bank —
     if the user disconnected, redirect home with a warning.
     """
-    acc  = Account.query.get_or_404(account_id)
+    acc  = _owned_account(account_id)
     conn = _get_connection(acc.bank)
     if not conn:
         flash(f"No active {acc.bank.capitalize()} connection.", "warning")
@@ -1333,15 +1394,17 @@ def balances(account_id):
                 commerzbank_client.get_oauth_token(), conn.consent_id, account_id)
         elif acc.bank == "nordea":
             balance_list = nordea_client.get_balances(conn.access_token, account_id)
+        elif acc.bank == "ing":
+            balance_list = ing_client.get_balances(conn.access_token, account_id)
+        elif acc.bank == "synthbank":
+            balance_list = synthbank_client.get_balances(conn.consent_id, account_id)
         else:
-            # Default catches UniCredit (and any future bank that uses
-            # the generic Berlin-Group `psd2_client`).
             balance_list = psd2_client.get_balances(
                 app.config["SANDBOX_BASE_URL"], conn.consent_id, account_id)
         return render_template("balances.html", balances=balance_list,
                                account_id=account_id, bank=acc.bank)
     except (psd2_client.PSD2ApiError, commerzbank_client.CommerzbankApiError,
-            nordea_client.NordeaApiError) as e:
+            nordea_client.NordeaApiError, ing_client.INGApiError, synthbank_client.SynthBankError) as e:
         flash(str(e), "error")
         return redirect(url_for("index"))
 
@@ -1353,7 +1416,7 @@ def transactions(account_id):
     upsert the freshly-fetched txns into the local DB so the analytics
     pages (dashboard, spending, recurring) see them next time.
     """
-    acc  = Account.query.get_or_404(account_id)
+    acc  = _owned_account(account_id)
     conn = _get_connection(acc.bank)
     if not conn:
         flash(f"No active {acc.bank.capitalize()} connection.", "warning")
@@ -1364,16 +1427,38 @@ def transactions(account_id):
                 commerzbank_client.get_oauth_token(), conn.consent_id, account_id)
         elif acc.bank == "nordea":
             txn_data = nordea_client.get_transactions(conn.access_token, account_id)
+        elif acc.bank == "ing":
+            txn_data = ing_client.get_transactions(conn.access_token, account_id)
+        elif acc.bank == "synthbank":
+            txn_data = synthbank_client.get_transactions(conn.consent_id, account_id)
         else:
             txn_data = psd2_client.get_transactions(
                 app.config["SANDBOX_BASE_URL"], conn.consent_id, account_id)
-        db_utils.upsert_transactions(acc.bank, account_id, txn_data)
+        db_utils.upsert_transactions(acc.bank, account_id, txn_data, user_id=current_user.id)
         return render_template("transactions.html", transactions=txn_data,
                                account_id=account_id, bank=acc.bank)
     except (psd2_client.PSD2ApiError, commerzbank_client.CommerzbankApiError,
-            nordea_client.NordeaApiError) as e:
+            nordea_client.NordeaApiError, ing_client.INGApiError, synthbank_client.SynthBankError) as e:
         flash(str(e), "error")
         return redirect(url_for("index"))
+
+
+# Hook used by the feed cron to re-sync synthetic bank connections.
+app.config["SYNTHBANK_SYNC"] = lambda conn: _fetch_and_store("synthbank", conn)
+
+
+# Empty DB? Create the 5 demo logins and their synthetic bank history so a
+# fresh checkout or a new database has something to show. This runs at the end
+# of the module because seed_data imports names defined above. The evaluation
+# population (200 customers) is seeded separately: `python seed_data.py`.
+with app.app_context():
+    if User.query.count() == 0:
+        try:
+            import seed_data
+            seed_data.main(population=0)
+        except Exception as exc:  # never let seeding crash app startup
+            db.session.rollback()
+            log.warning("seed.failed", extra={"event": "seed.failed", "error": str(exc)[:300]})
 
 
 if __name__ == "__main__":

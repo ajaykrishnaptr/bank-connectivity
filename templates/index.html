@@ -201,23 +201,20 @@
 {% endif %}
 
 
-{% if is_demo %}
-<!-- ── Demo disclaimer: live connect needs sandbox creds absent on Vercel ── -->
+<!-- ── Data notice: live sandboxes plus a labelled synthetic bank ─────────── -->
 <div style="display:flex;align-items:flex-start;gap:.75rem;
-  background:linear-gradient(135deg,rgba(245,158,11,.12),rgba(245,158,11,.04));
-  border:1px solid rgba(245,158,11,.35);border-radius:14px;
+  background:linear-gradient(135deg,rgba(109,40,217,.10),rgba(109,40,217,.03));
+  border:1px solid rgba(109,40,217,.28);border-radius:14px;
   padding:1rem 1.25rem;margin-bottom:1.5rem">
-  <span style="font-size:1.15rem;line-height:1.3;flex-shrink:0">⚠️</span>
+  <span style="font-size:1.15rem;line-height:1.3;flex-shrink:0">🧪</span>
   <div style="font-size:.8125rem;line-height:1.6;color:var(--text-2)">
-    <strong style="color:var(--text)">Demo mode — connecting a live bank is disabled here.</strong>
-    The bank integrations below run only against each bank's <strong>PSD2 sandbox</strong>,
-    which requires mTLS client certificates and sandbox credentials that aren't deployed to
-    this public Vercel host. The dashboards you see are populated with realistic
-    <strong>seeded demo data</strong>. To exercise the real connect flows, run FintNet locally
-    with the sandbox certs in <code>.env</code> — see the README.
+    <strong style="color:var(--text)">Test data only.</strong>
+    UniCredit, Commerzbank, Nordea and ING connect live to each bank's <strong>PSD2 sandbox</strong>
+    (mTLS certificates, consent and SCA). Each demo login is the test user that exists in its bank's
+    sandbox. The <strong>Synthetic Bank</strong> adds 13 months of generated Berlin Group transactions,
+    with new ones every day, so the assistant has enough history. No real customer data is used.
   </div>
 </div>
-{% endif %}
 
 <!-- ── Bank integrations header ──────────────────────────────────────────── -->
 <div style="display:flex;align-items:center;gap:1rem;margin-bottom:1.25rem">
@@ -225,7 +222,7 @@
     Supported Banks
   </div>
   <div style="flex:1;height:1px;background:var(--border)"></div>
-  <div style="font-size:.75rem;color:var(--text-3)">Connect one or all five</div>
+  <div style="font-size:.75rem;color:var(--text-3)">4 live sandboxes and a synthetic bank</div>
 </div>
 
 <!-- ── Bank cards ────────────────────────────────────────────────────────── -->
@@ -241,12 +238,12 @@
   ('nordea',      'Nordea',      '#3498db', 'Finland · Sweden · Norway · Denmark',
    'Connect your Nordea account from anywhere in Scandinavia and track everything in one dashboard.',
    url_for('nordea_connect')),
-  ('deutschebank', 'Deutsche Bank', '#0018a8', 'Germany',
-   'Connect your Deutsche Bank account via PSD2 and get a complete view of your balances and transactions.',
-   url_for('deutschebank_connect')),
   ('ing', 'ING', '#FF6200', 'Netherlands · Belgium · Germany',
    'Connect your ING account and see all your balances and transactions in one unified dashboard.',
    url_for('ing_connect')),
+  ('synthbank', 'Synthetic Bank', '#6d28d9', 'Germany · Finland · Sweden · Netherlands · Italy',
+   'Berlin Group test bank with 13 months of generated history and a daily feed of new transactions.',
+   url_for('synthbank_connect')),
 ] %}
 
 {% set conn = connections.get(bank_id) %}

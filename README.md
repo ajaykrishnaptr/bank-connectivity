@@ -38,7 +38,7 @@ Connect European bank accounts in one place. FintNet fetches accounts, balances,
 | Nordea | Finland, Sweden, Norway, Denmark | OAuth2 authorization_code + SCA | Ready |
 | Commerzbank | Germany | OAuth2 client_credentials + consent | Ready — no redirect needed |
 | UniCredit | Italy | mTLS + PSD2 consent SCA | Ready (sandbox) |
-| Deutsche Bank | Germany | OAuth2 + Berlin Group consent + SCA redirect | Client built, awaiting credentials |
+| Synthetic Bank | DE, FI, SE, NL, IT | Berlin Group AIS test bank inside this app, simulated SCA | Ready (13 months of generated history, daily feed) |
 | ING | Netherlands, Belgium, Germany | mTLS + HTTP Signatures + OAuth2 authorization_code | Working with sandbox example client |
 
 ### ING flow specifics
@@ -183,23 +183,62 @@ If the database is empty (a fresh checkout, or a serverless cold start), the app
 
 ---
 
-## Deploying to Vercel
+## Deploying to Vercel (live sandboxes, Postgres, cron)
 
-The repo ships a `vercel.json`, an `api/index.py` WSGI entry point, and a `.vercelignore`, so a read-only demo deploys with no extra config:
+Production runs on Vercel with live PSD2 sandbox connections. `vercel.json` routes all traffic to `api/index.py` and schedules 4 daily cron jobs.
+
+| Concern | How it works |
+|---|---|
+| Certificates | Leaf certificates and keys are sensitive env vars (`UC_CERT_B64`, `UC_KEY_B64`, `ING_TLS_CERT_B64`, `ING_TLS_KEY_B64`, `ING_SIGNING_CERT_B64`, `ING_SIGNING_KEY_B64`). `runtime_certs.py` writes them to `/tmp` with mode 0600 on cold start. `certs/` is never uploaded; root, intermediate and OCSP-signer keys never leave the laptop. |
+| Database | Neon Postgres from the Vercel Marketplace (`DATABASE_URL`). Consents and tokens survive across function instances. |
+| Sessions | `FLASK_SECRET_KEY` is required on Vercel (the app refuses to start without it). |
+| UniCredit redirect | `REDIRECT_URI=auto` builds `https://<current host>/callback`, so the flow works on `app.fintnet.ai` and on the `vercel.app` alias. |
+| Nordea | The sandbox mock authorizer returns the code in the `Location` header, so the registered redirect URI is only echoed, never visited. Country (FI or SE) is chosen on the consent page. |
+| ING | The sandbox example client redirects to `https://www.example.com/`; paste the code on `/ing/enter-code`. |
+| OCSP and CRL | Stay on the Oracle VM (`ocsp.fintnet.ai`, `crl.fintnet.ai`): UniCredit requires plain HTTP for revocation checks and Vercel forces HTTPS. Refresh the CRL monthly with `./deploy_crl.sh` from the laptop. |
+| Model | Claude Haiku 4.5 (`ANTHROPIC_API_KEY`), capped by `LLM_MAX_CALLS` per instance. |
+| Tracing | Langfuse (`LANGFUSE_*`) plus a Splunk HEC event log: Upstash Redis on Vercel (`KV_REST_API_URL`, `KV_REST_API_TOKEN`), `logs/events.jsonl` locally. |
+
+### Cron jobs (Vercel Hobby: once a day each, within the scheduled hour)
+
+| UTC | Route | Does |
+|---|---|---|
+| 01:00 | `/cron/feed` | Books missing days in the synthetic bank (up to 7 per run), deletes history older than 13 months, re-syncs connected users |
+| 02:00 | `/cron/categorise` | Upgrades provisional rule categories with Claude Haiku (capped per run) |
+| 03:00 | `/cron/evaluate` | Creates the Langfuse dataset `fintnet-categorisation-daily/<date>` and runs one experiment on it |
+| 04:00 | `/cron/health` | CRL next update, OCSP status of the UniCredit leaf, certificate expiry |
+
+Every route requires `Authorization: Bearer $CRON_SECRET`, is idempotent per date (`job_runs` table, `?force=1` to rerun) and shows on the **Ops** page.
 
 ```bash
-vercel        # preview deploy
-vercel --prod # production deploy
+curl -H "Authorization: Bearer $CRON_SECRET" https://app.fintnet.ai/cron/feed
 ```
 
-How it works on serverless:
-- `api/index.py` re-exports the Flask `app`; `vercel.json` routes all traffic to it and bundles `templates/`.
-- Vercel's filesystem is read-only except `/tmp`, so when `VERCEL=1` is set the SQLite DB lives at `/tmp/ais.db` and **auto-seeds on each cold start** — the demo always has data without a build step.
-- `USE_AI_CATEGORIZER=false` is set in `vercel.json` (no Ollama on serverless); seeded transactions are pre-categorised, so the dashboards render fully.
+---
 
-Optional: set `FLASK_SECRET_KEY` in the Vercel dashboard so login sessions survive redeploys.
+## Synthetic bank
 
-> **Scope:** this is a self-contained **read-only demo**. Live bank connectivity (mTLS client certs, bank-registered redirect URIs, a persistent Postgres instead of `/tmp` SQLite) is intentionally out of scope for the Vercel deploy.
+A Berlin Group NextGenPSD2 AIS test bank inside the app (`synthbank/`), because the real sandboxes return a handful of static transactions.
+
+- **Customers:** the 5 demo logins plus an evaluation population (default 200) across DE, FI, SE, NL and IT.
+- **History:** a rolling 13 months, seeded once (`python seed_data.py`), then one day at a time by the feed cron.
+- **Random categories, honest labels:** each discretionary purchase draws a category weighted by persona, then a merchant that truly belongs to it: about 60% known merchants, 30% new merchants from templates and 10% hard cases (payment-facilitator prefixes, truncation, typos, misleading names). New merchants keep the model tier doing work instead of turning into a cache lookup. No language model writes the data.
+- **Label firewall:** ground truth lives in `sb_labels` and is read only by the evaluation job. The API (`/synthetic-bank/v1/...`), the tools and the model never see it.
+- **API:** `POST /synthetic-bank/v1/consents`, `GET /synthetic-bank/v1/accounts`, `.../balances`, `.../transactions` with a `Consent-ID` header; simulated SCA at `/synthetic-bank/authorise/<consent>`.
+
+## Money questions assistant (`/ask`)
+
+Claude Haiku answers questions across every connected bank using 7 deterministic tools (`assistant.py`): accounts, spending by category, top merchants, monthly cash flow, period comparison, recurring payments and transaction search. Code computes every figure; the model chooses tools and words the answer. Credit, loan and investment questions are refused in code before any model call, and the page discloses that answers come from an AI system.
+
+## Evaluations in Langfuse
+
+| Dataset | Built by | Graded |
+|---|---|---|
+| `fintnet-categorisation-daily/<date>` | `/cron/evaluate` every day | Model accuracy overall, on new merchants and hard cases, confidence calibration, against the keyword-rules baseline |
+| `fintnet-categorisation-benchmark` | `python evals/categoriser_experiment.py sync-benchmark` | Same, on a fixed 300-item sample for comparing prompts and models |
+| `fintnet-assistant-questions` | `python evals/assistant_experiment.py sync` | Tool choice and the key figure in the answer (code), plus a Groq `openai/gpt-oss-120b` judge on faithfulness, scope and concision |
+
+Run an experiment: `python evals/assistant_experiment.py run` or `python evals/categoriser_experiment.py run-benchmark`. Results are also saved to `evals/results/`.
 
 ---
 
@@ -226,53 +265,32 @@ Every event is a single-line JSON object with `ts`, `level`, `logger`, `event`, 
 
 ## Seeding test data
 
-Populates the DB with one demo persona per connected bank, plus bank connections, accounts, and ~6 months of transactions. Safe to re-run — clears and recreates test data each time. (The app also auto-seeds an empty database on first request, so this is only needed for a manual re-seed.)
-
 ```bash
-python3 seed_data.py
+python3 seed_data.py                  # 5 demo logins + 200 evaluation customers, 13 months each
+python3 seed_data.py --population 0   # demo logins only (what an empty database gets on startup)
 ```
+
+Re-runnable: only missing users, customers and history are created.
 
 ---
 
 ## Test accounts
 
-All accounts use password: **`TestPass123`** — and the login page lists them as one-click "Try a demo account" chips.
+All accounts use password **`TestPass123`**; the login page lists them as one-click chips.
 
-Each persona uses the placeholder name that the relevant country's banking sandboxes use (Max Mustermann for Germany, Mario Rossi for Italy, Jan Jansen for the Netherlands, etc.), so the demo reads like sandbox data. There is one persona per connected bank, with two for Nordea to show multi-currency aggregation.
+Each login is the test user that exists in one bank's PSD2 sandbox, so the sandbox SCA screen and the returned account owner match the login. Each is also a synthetic bank customer with 13 months of data, connected on seed.
 
-| Name | Email | Banks | Currency |
-|------|-------|-------|----------|
-| Max Mustermann | `max.mustermann@example.de` | Commerzbank DE + Deutsche Bank DE | EUR |
-| Anna Korhonen | `anna.korhonen@example.fi` | Nordea FI | EUR |
-| Sven Andersson | `sven.andersson@example.se` | Nordea SE | SEK |
-| Jan Jansen | `jan.jansen@example.nl` | ING NL | EUR |
-| Mario Rossi | `mario.rossi@example.it` | UniCredit IT | EUR |
-
-**Max Mustermann** — 4 German accounts across two banks (2 Commerzbank `Girokonto`/`Sparkonto`, 2 Deutsche Bank `Girokonto`/`Tagesgeld`), salary from SAP SE ~€4,200/mo. Best demo for multi-bank consolidation within one country.
-
-**Anna Korhonen** — 2 Finnish Nordea accounts (`Käyttötili` + `Säästötili`), salary from Nokia Oyj ~€4,000/mo.
-
-**Sven Andersson** — 2 Swedish Nordea accounts (`Lönekonto` + `Sparkonto`) in SEK, salary from Volvo Group ~38,000–44,000 SEK/mo. Best demo for cross-border currency conversion.
-
-**Jan Jansen** — 2 Dutch ING accounts (`Betaalrekening` + `Oranje Spaarrekening`), salary from Philips NV ~€4,100/mo.
-
-**Mario Rossi** — 2 Italian UniCredit accounts (`Conto Corrente` + `Conto Deposito`), salary from Enel SpA ~€3,900/mo.
-
-Each current account includes:
-- Monthly salary credit (1st–5th of month)
-- Fixed recurring: Netflix, Spotify, Disney+, Deutsche Telekom, Vattenfall, TK Krankenkasse, rent
-- Variable expenses: Lidl, REWE, McDonald's, Starbucks, Deutsche Bahn, H&M, Zalando, and more
-- Occasional freelance / transfer income
+| Login | Email | Live sandbox | Sandbox SCA |
+|------|-------|-------|-------|
+| Thomas Mann | `thomas.mann@example.de` | Commerzbank, PSU-ID `DE80480800200405423400` | Pre-approved sandbox consent |
+| Aino Salo | `aino.salo@example.fi` | Nordea FI | Mock authorizer `70311198` |
+| Margit Alros | `margit.alros@example.se` | Nordea SE (SEK and EUR accounts) | Mock authorizer `70311198` |
+| A van Dijk | `a.vandijk@example.nl` | ING NL, profile "Hr A van Dijk, Mw B Mol-van Dijk" | Pick the profile, paste the code |
+| Mario Rossi | `mario.rossi@example.it` | UniCredit IT | Sandbox user `ituser2bgk` (UniCredit developer portal, Test Data) |
 
 ---
 
 ## Roadmap (technical)
-
-**Pending setup**
-- [ ] Deutsche Bank sandbox credentials — register at [developer.db.com](https://developer.db.com), then add to `.env`:
-  - `DB_CLIENT_ID`, `DB_CLIENT_SECRET`
-  - `DB_SANDBOX_PSU_ID` (from Dashboard → My Test Users)
-  - `DB_BASE_URL`, `DB_TOKEN_URL` (from your app's API docs page after registration)
 
 **More banks to integrate**
 - Santander (Spain/Portugal) — Berlin Group, good sandbox
@@ -284,7 +302,6 @@ Each current account includes:
 - Bank registry — config-driven bank catalogue (name, country, spec, base URL, auth method) so adding a new bank doesn't require a new client file
 - Unified PSD2 adapter — single client that handles Berlin Group NextGenPSD2 spec (covers ~80% of EU banks); keep bespoke clients only for non-standard banks (Nordea, UniCredit)
 - Token refresh / expiry handling — mark connection as `expired`, show Reconnect button
-- Background data sync — periodic re-fetch of transactions per active connection
 - Consent renewal — auto-prompt users before 90-day consent windows expire
 
 ---

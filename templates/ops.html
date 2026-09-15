@@ -1,0 +1,109 @@
+{% extends "base.html" %}
+{% block content %}
+<style>
+  .ops-json { font-family: var(--font-mono); font-size: .7rem; white-space: pre-wrap; color: var(--text-2);
+              max-height: 320px; overflow: auto; background: var(--surface-2); padding: .75rem 1rem; }
+  .status-ok { background: var(--green-bg); color: #14532d; }
+  .status-warn { background: var(--amber-bg); color: #78350f; }
+  .status-error { background: var(--red-bg); color: #7f1d1d; }
+  .status-running { background: var(--accent-bg); color: var(--accent-hover); }
+</style>
+
+<div style="margin-bottom:1.25rem">
+  <h2>Operations</h2>
+  <p class="text-muted" style="font-size:.85rem;margin-top:.25rem">
+    Daily jobs on Vercel Cron, the categoriser evaluation (also stored as Langfuse datasets and experiment runs),
+    trust-chain health for the live sandboxes, and model usage.
+  </p>
+</div>
+
+<div class="grid grid-4" style="margin-bottom:1.5rem">
+  {% for job in ['feed', 'categorise', 'evaluate', 'health'] %}
+  {% set r = latest[job] %}
+  <div class="card">
+    <div class="card-label">{{ job }}</div>
+    {% if r %}
+    <div style="margin-top:.4rem"><span class="pill status-{{ r.status }}">{{ r.status }}</span></div>
+    <div class="card-meta">{{ r.run_date }}{% if r.finished_at %} · done {{ r.finished_at.strftime('%H:%M') }} UTC{% endif %}</div>
+    {% else %}
+    <div class="card-meta">never run</div>
+    {% endif %}
+  </div>
+  {% endfor %}
+</div>
+
+<div class="grid grid-2" style="margin-bottom:1.5rem">
+  <div class="card">
+    <div class="card-label">Categoriser accuracy by day (model vs rules)</div>
+    {% if evals %}
+    <table style="margin-top:.5rem">
+      <thead><tr><th>Booking date</th><th class="num">n</th><th class="num">Model</th><th class="num">New merchants</th>
+        <th class="num">Hard cases</th><th class="num">Rules</th></tr></thead>
+      <tbody>
+      {% for e in evals %}{% set d = e.details or {} %}
+      <tr>
+        <td class="mono" style="font-size:.75rem">{{ d.booking_date or e.run_date }}
+          {% if d.dataset_run_url %}<a href="{{ d.dataset_run_url }}" target="_blank" rel="noopener" style="font-size:.7rem">run ↗</a>{% endif %}</td>
+        <td class="num">{{ d.sample_size }}</td>
+        <td class="num">{{ '%.0f%%' % (d.model_accuracy.all * 100) if d.model_accuracy and d.model_accuracy.all is not none else '—' }}</td>
+        <td class="num">{{ '%.0f%%' % (d.model_accuracy.novel * 100) if d.model_accuracy and d.model_accuracy.novel is not none else '—' }}</td>
+        <td class="num">{{ '%.0f%%' % (d.model_accuracy.hard * 100) if d.model_accuracy and d.model_accuracy.hard is not none else '—' }}</td>
+        <td class="num">{{ '%.0f%%' % (d.rules_accuracy.all * 100) if d.rules_accuracy and d.rules_accuracy.all is not none else '—' }}</td>
+      </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+    {% else %}
+    <div class="card-meta">No evaluation has run yet.</div>
+    {% endif %}
+  </div>
+
+  <div class="card">
+    <div class="card-label">Model and categoriser</div>
+    <table style="margin-top:.5rem">
+      <tr><td>Categoriser provider</td><td class="mono">{{ provider }}</td></tr>
+      <tr><td>Model</td><td class="mono">{{ usage.model }}</td></tr>
+      <tr><td>Calls this instance</td><td class="mono">{{ usage.calls }} (errors {{ usage.errors }})</td></tr>
+      <tr><td>Tokens this instance</td><td class="mono">{{ usage.input_tokens }} in · {{ usage.output_tokens }} out</td></tr>
+      <tr><td>Model available</td><td class="mono">{{ usage.available }}</td></tr>
+    </table>
+    {% set h = latest['health'] %}
+    {% if h and h.details %}
+    <div class="card-label" style="margin-top:1rem">Trust chain</div>
+    <table style="margin-top:.4rem">
+      <tr><td>CRL</td><td><span class="pill status-{{ h.details.crl.status }}">{{ h.details.crl.status }}</span>
+        <span class="mono" style="font-size:.72rem">{{ h.details.crl.days_left }} days left</span></td></tr>
+      <tr><td>OCSP (UniCredit leaf)</td><td><span class="pill status-{{ h.details.ocsp.status }}">{{ h.details.ocsp.certificate_status or h.details.ocsp.status }}</span></td></tr>
+      {% for name, c in (h.details.certificates or {}).items() %}
+      <tr><td>{{ name }}</td><td><span class="pill status-{{ c.status }}">{{ c.status }}</span>
+        <span class="mono" style="font-size:.72rem">{{ c.days_left if c.days_left is defined else c.error }}{% if c.days_left is defined %} days{% endif %}</span></td></tr>
+      {% endfor %}
+    </table>
+    {% endif %}
+  </div>
+</div>
+
+<div class="card" style="margin-bottom:1.5rem">
+  <div class="card-label">Job runs</div>
+  <table style="margin-top:.5rem">
+    <thead><tr><th>Date</th><th>Job</th><th>Status</th><th>Details</th></tr></thead>
+    <tbody>
+    {% for r in runs %}
+    <tr>
+      <td class="mono" style="font-size:.75rem">{{ r.run_date }}</td>
+      <td>{{ r.job }}</td>
+      <td><span class="pill status-{{ r.status }}">{{ r.status }}</span></td>
+      <td><details style="margin:0"><summary><span class="arrow">▶</span> show</summary>
+        <div class="ops-json">{{ r.details | tojson(indent=2) }}</div></details></td>
+    </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</div>
+
+<div class="card">
+  <div class="card-label">Recent events (Splunk HEC format)</div>
+  <div class="ops-json" style="margin-top:.5rem">{% for e in events %}{{ e.time }} {{ e.sourcetype }} {{ e.event.name }} {{ e.event.status }}{% if e.event.duration_ms is not none %} {{ e.event.duration_ms }}ms{% endif %}{% if e.event.model %} {{ e.event.model }}{% endif %}
+{% endfor %}</div>
+</div>
+{% endblock %}

@@ -1,0 +1,97 @@
+{% extends "base.html" %}
+{% block content %}
+<style>
+  .ask-wrap { max-width: 860px; margin: 0 auto; }
+  .ask-box { display: flex; gap: .625rem; }
+  .ask-box input {
+    flex: 1; padding: .8rem 1rem; border: 1px solid var(--border); border-radius: var(--radius-sm);
+    font-size: .9375rem; font-family: var(--font-body); background: var(--surface);
+  }
+  .ask-box input:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-glow); }
+  .chips { display: flex; flex-wrap: wrap; gap: .4rem; margin-top: .75rem; }
+  .chip {
+    font-size: .75rem; padding: .35rem .7rem; border-radius: 20px; border: 1px solid var(--border);
+    background: var(--surface); color: var(--text-2); cursor: pointer; font-family: var(--font-body);
+  }
+  .chip:hover { border-color: var(--accent); color: var(--accent-hover); }
+  .answer { font-size: .95rem; line-height: 1.7; white-space: pre-wrap; color: var(--text); }
+  .ai-note { font-size: .72rem; color: var(--text-3); margin-top: .5rem; }
+  .tool-json { font-family: var(--font-mono); font-size: .7rem; white-space: pre-wrap; color: var(--text-2);
+               max-height: 260px; overflow: auto; background: var(--surface-2); padding: .75rem 1rem; }
+</style>
+
+<div class="ask-wrap">
+  <div style="margin-bottom:1.25rem">
+    <h2>Ask about your money</h2>
+    <p class="text-muted" style="font-size:.85rem;margin-top:.25rem">
+      Questions across every connected bank. Code computes every figure; the AI model only chooses
+      which calculations to run and words the answer.
+    </p>
+  </div>
+
+  <div class="alert alert-info" style="align-items:flex-start">
+    <span>🤖</span>
+    <span>You are talking to an AI system ({{ model }}). Answers describe your spending, income and recurring
+      payments only. It does not give credit, loan or investment advice.</span>
+  </div>
+
+  {% if not assistant_enabled %}
+  <div class="alert alert-warning">The assistant is unavailable: no model key configured or the call budget for this
+    server instance is used up.</div>
+  {% endif %}
+
+  <form method="post" action="{{ url_for('ask') }}">
+    <div class="ask-box">
+      <input id="question" name="question" maxlength="500" autocomplete="off" required
+             placeholder="e.g. Why did my spending change last month?" value="{{ question }}">
+      <button class="btn btn-primary" type="submit">Ask</button>
+    </div>
+    <div class="chips">
+      {% for ex in examples %}
+      <button type="button" class="chip" onclick="document.getElementById('question').value=this.textContent;">{{ ex }}</button>
+      {% endfor %}
+    </div>
+  </form>
+
+  {% if result %}
+  <div class="card" style="margin-top:1.5rem">
+    <div class="card-label">Answer{% if result.refused %} · refused by policy{% endif %}</div>
+    <div class="answer" style="margin-top:.5rem">{{ result.answer }}</div>
+    <div class="ai-note">
+      AI-generated from the figures below.
+      {% if result.trace_id %}Trace <span class="mono">{{ result.trace_id[:12] }}</span>.{% endif %}
+    </div>
+
+    {% if result.tools %}
+    <details>
+      <summary><span class="arrow">▶</span> How this was computed · {{ result.tools | length }} tool call{{ 's' if result.tools|length != 1 }}</summary>
+      {% for t in result.tools %}
+      <div style="padding:.6rem 1.25rem 0;font-size:.78rem">
+        <span class="pill pill-info">{{ t.name }}</span>
+        <span class="mono text-muted" style="font-size:.7rem">{{ t.input | tojson }}</span>
+      </div>
+      <div class="tool-json" style="margin:.4rem 1.25rem .6rem">{{ t.output | tojson(indent=2) }}</div>
+      {% endfor %}
+    </details>
+    {% endif %}
+  </div>
+  {% endif %}
+
+  {% if history %}
+  <div style="margin-top:1.5rem">
+    <div class="card-label" style="margin-bottom:.5rem">Earlier questions</div>
+    {% for h in history %}
+    <div class="card" style="margin-bottom:.625rem;padding:1rem 1.25rem">
+      <div class="fw-600" style="font-size:.85rem">{{ h.q }}</div>
+      <div class="text-muted" style="font-size:.8rem;margin-top:.3rem;white-space:pre-wrap">{{ h.a }}</div>
+    </div>
+    {% endfor %}
+  </div>
+  {% endif %}
+
+  <p class="text-muted" style="font-size:.72rem;margin-top:1.5rem">
+    Model calls this server instance: {{ usage.calls }} · input tokens {{ usage.input_tokens }} ·
+    output tokens {{ usage.output_tokens }}.
+  </p>
+</div>
+{% endblock %}

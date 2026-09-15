@@ -1,0 +1,296 @@
+"""
+Money questions across every connected bank (use case F4).
+
+Design rule: code computes every number, the model only decides which tools
+to call and words the answer. The tools below query the user's own
+transactions (all connected banks, converted to EUR the same way the Balances
+page does). The model never sees raw rows beyond what a tool returns.
+
+Guardrails:
+  * Credit, loan, creditworthiness and investment questions are refused in
+    code before any model call (AI Act Annex III 5(b) keeps credit decisions
+    out; investment advice is regulated), and the system prompt repeats it.
+  * At most MAX_ROUNDS tool rounds per question; per-instance call cap in llm.py.
+  * Every question is one Langfuse trace; every tool call a child span.
+  * The page discloses that answers come from an AI system (AI Act Article 50).
+"""
+from __future__ import annotations
+
+import json
+import re
+from collections import defaultdict
+from datetime import date, timedelta
+from typing import Any, Callable
+
+import currency_utils
+import llm
+import observability
+from models import Account, BankConnection, Transaction, db
+
+MAX_ROUNDS = 6
+MAX_TOKENS = 1500
+
+_REFUSE = re.compile(
+    r"\b(loans?|mortgages?|credit ?scores?|creditworthiness|borrow(ing)?|kredite?|darlehen|schufa|"
+    r"invest(ing|ment|ments|or|ors)?|stocks?|shares|etfs?|crypto(currency|currencies)?|bitcoin|aktien?|"
+    r"geldanlage|should i buy)\b", re.IGNORECASE)
+
+REFUSAL = ("I can't help with credit, loans or investment decisions. I can answer questions about your "
+           "spending, income, balances and recurring payments across your connected banks.")
+
+SYSTEM_TEMPLATE = """You answer questions about the user's own money across all the bank accounts they connected to FintNet (PSD2 account information, read-only).
+
+Today is {today}. Connected banks: {banks}. Data covers {coverage}.
+
+Rules:
+- Every number in your answer must come from a tool result in this conversation. Never estimate, extrapolate or do arithmetic the tools did not return; if you need a figure, call a tool that returns it.
+- Amounts are in EUR unless a tool says otherwise. Say which period a figure covers.
+- If the data does not cover the question (dates outside the coverage, a bank that is not connected), say so plainly.
+- Do not give credit, loan, creditworthiness or investment advice; say you can only describe their spending and income.
+- Answer in at most 5 short sentences or a short list. Name merchants, categories and banks as the tools return them.
+- Resolve relative dates ("last month", "March") against today's date before calling tools."""
+
+TOOLS: list[dict] = [
+    {"name": "list_accounts",
+     "description": "All connected accounts with bank, currency, balance in native currency and EUR, and the first and last transaction date. Call this to learn what data exists.",
+     "input_schema": {"type": "object", "properties": {}, "additionalProperties": False}},
+    {"name": "spending_by_category",
+     "description": "Money paid out per category between two dates (inclusive), in EUR, with transaction counts. Optional bank filter.",
+     "input_schema": {"type": "object", "properties": {
+         "date_from": {"type": "string", "description": "YYYY-MM-DD"},
+         "date_to": {"type": "string", "description": "YYYY-MM-DD"},
+         "bank": {"type": "string", "description": "optional bank id, e.g. nordea, commerzbank, ing, unicredit, synthbank"}},
+         "required": ["date_from", "date_to"], "additionalProperties": False}},
+    {"name": "top_merchants",
+     "description": "Merchants the user paid most between two dates, in EUR, optionally within one category.",
+     "input_schema": {"type": "object", "properties": {
+         "date_from": {"type": "string"}, "date_to": {"type": "string"},
+         "category": {"type": "string"}, "limit": {"type": "integer", "description": "1-20, default 10"}},
+         "required": ["date_from", "date_to"], "additionalProperties": False}},
+    {"name": "monthly_cash_flow",
+     "description": "Income, spending and net per calendar month for the last N months (1-13), in EUR.",
+     "input_schema": {"type": "object", "properties": {"months": {"type": "integer"}},
+                      "required": ["months"], "additionalProperties": False}},
+    {"name": "compare_periods",
+     "description": "Spending per category in period A versus period B, with the difference and percentage change, in EUR. Use for questions like 'why did my spending jump in March'.",
+     "input_schema": {"type": "object", "properties": {
+         "a_from": {"type": "string"}, "a_to": {"type": "string"},
+         "b_from": {"type": "string"}, "b_to": {"type": "string"}},
+         "required": ["a_from", "a_to", "b_from", "b_to"], "additionalProperties": False}},
+    {"name": "recurring_payments",
+     "description": "Recurring payments (fixed subscriptions and variable bills), recurring income, and wasted-spend signals such as price rises and duplicate subscriptions.",
+     "input_schema": {"type": "object", "properties": {}, "additionalProperties": False}},
+    {"name": "find_transactions",
+     "description": "Individual transactions matching filters, newest first, at most 25.",
+     "input_schema": {"type": "object", "properties": {
+         "date_from": {"type": "string"}, "date_to": {"type": "string"}, "category": {"type": "string"},
+         "merchant_contains": {"type": "string"},
+         "direction": {"type": "string", "enum": ["out", "in", "any"]},
+         "min_amount_eur": {"type": "number"}, "limit": {"type": "integer"}},
+         "additionalProperties": False}},
+]
+
+
+def _d(value: Any, default: date) -> date:
+    try:
+        return date.fromisoformat(str(value))
+    except (TypeError, ValueError):
+        return default
+
+
+class Tools:
+    """Deterministic tool implementations over one user's transactions."""
+
+    def __init__(self, user_id: int, recurring_fn: Callable[[], dict]):
+        self.user_id = user_id
+        self.recurring_fn = recurring_fn
+        self.rates = currency_utils.get_rates("EUR")
+        self.rows = (db.session.query(Transaction, Account)
+                     .join(Account, Transaction.account_id == Account.id)
+                     .filter(Account.user_id == user_id, Transaction.status == "booked").all())
+
+    def _eur(self, t: Transaction, a: Account) -> float:
+        return currency_utils.to_eur(float(t.amount or 0), t.currency or a.currency or "EUR", self.rates)
+
+    def _between(self, d0: date, d1: date, bank: str | None = None):
+        for t, a in self.rows:
+            if t.booking_date and d0 <= t.booking_date <= d1 and (not bank or a.bank == bank):
+                yield t, a
+
+    def coverage(self) -> str:
+        dates = [t.booking_date for t, _ in self.rows if t.booking_date]
+        return f"{min(dates)} to {max(dates)}" if dates else "no transactions yet"
+
+    def list_accounts(self) -> dict:
+        out = []
+        accounts = Account.query.filter_by(user_id=self.user_id).order_by(Account.bank).all()
+        for acc in accounts:
+            native = sum(float(t.amount or 0) for t in acc.transactions)
+            dates = [t.booking_date for t in acc.transactions if t.booking_date]
+            out.append({"bank": acc.bank, "name": acc.name, "owner": acc.owner_name, "currency": acc.currency,
+                        "balance_native": round(native, 2),
+                        "balance_eur": round(currency_utils.to_eur(native, acc.currency or "EUR", self.rates), 2),
+                        "first_transaction": str(min(dates)) if dates else None,
+                        "last_transaction": str(max(dates)) if dates else None,
+                        "transactions": len(acc.transactions)})
+        return {"accounts": out, "note": "balance = sum of stored transactions"}
+
+    def spending_by_category(self, date_from: str, date_to: str, bank: str | None = None) -> dict:
+        d0, d1 = _d(date_from, date.today() - timedelta(days=30)), _d(date_to, date.today())
+        totals, counts = defaultdict(float), defaultdict(int)
+        for t, a in self._between(d0, d1, bank):
+            if float(t.amount or 0) < 0:
+                totals[t.category or "Other"] += -self._eur(t, a)
+                counts[t.category or "Other"] += 1
+        cats = sorted(({"category": c, "eur": round(v, 2), "transactions": counts[c]} for c, v in totals.items()),
+                      key=lambda x: -x["eur"])
+        total = round(sum(totals.values()), 2)
+        return {"date_from": str(d0), "date_to": str(d1), "bank": bank or "all", "categories": cats,
+                "total_out_eur": total,
+                "total_out_excluding_transfers_eur": round(total - totals.get("Transfers / Other", 0), 2)}
+
+    def top_merchants(self, date_from: str, date_to: str, category: str | None = None, limit: int = 10) -> dict:
+        d0, d1 = _d(date_from, date.today() - timedelta(days=30)), _d(date_to, date.today())
+        totals, counts, banks = defaultdict(float), defaultdict(int), defaultdict(set)
+        for t, a in self._between(d0, d1):
+            if float(t.amount or 0) < 0 and (not category or t.category == category):
+                name = t.creditor_name or t.debtor_name or "Unknown"
+                totals[name] += -self._eur(t, a)
+                counts[name] += 1
+                banks[name].add(a.bank)
+        limit = max(1, min(int(limit or 10), 20))
+        top = sorted(totals.items(), key=lambda kv: -kv[1])[:limit]
+        return {"date_from": str(d0), "date_to": str(d1), "category": category or "all",
+                "merchants": [{"merchant": m, "eur": round(v, 2), "transactions": counts[m],
+                               "banks": sorted(banks[m])} for m, v in top]}
+
+    def monthly_cash_flow(self, months: int = 6) -> dict:
+        months = max(1, min(int(months or 6), 13))
+        today = date.today()
+        keys, y, m = [], today.year, today.month
+        for _ in range(months):
+            keys.insert(0, (y, m))
+            m -= 1
+            if m == 0:
+                y, m = y - 1, 12
+        flow = {k: {"income": 0.0, "spending": 0.0} for k in keys}
+        for t, a in self.rows:
+            if not t.booking_date:
+                continue
+            k = (t.booking_date.year, t.booking_date.month)
+            if k in flow:
+                eur = self._eur(t, a)
+                flow[k]["income" if eur > 0 else "spending"] += abs(eur)
+        return {"months": [{"month": f"{y}-{m:02d}", "income_eur": round(v["income"], 2),
+                            "spending_eur": round(v["spending"], 2),
+                            "net_eur": round(v["income"] - v["spending"], 2)} for (y, m), v in flow.items()],
+                "note": f"current month {today:%Y-%m} is partial"}
+
+    def compare_periods(self, a_from: str, a_to: str, b_from: str, b_to: str) -> dict:
+        a = self.spending_by_category(a_from, a_to)
+        b = self.spending_by_category(b_from, b_to)
+        amap = {c["category"]: c["eur"] for c in a["categories"]}
+        bmap = {c["category"]: c["eur"] for c in b["categories"]}
+        rows = []
+        for cat in sorted(set(amap) | set(bmap)):
+            va, vb = amap.get(cat, 0.0), bmap.get(cat, 0.0)
+            rows.append({"category": cat, "a_eur": va, "b_eur": vb, "diff_eur": round(vb - va, 2),
+                         "pct_change": round((vb - va) / va * 100, 1) if va else None})
+        rows.sort(key=lambda r: -abs(r["diff_eur"]))
+        return {"period_a": [a["date_from"], a["date_to"]], "period_b": [b["date_from"], b["date_to"]],
+                "total_a_eur": a["total_out_eur"], "total_b_eur": b["total_out_eur"],
+                "total_diff_eur": round(b["total_out_eur"] - a["total_out_eur"], 2),
+                "total_pct_change": round((b["total_out_eur"] - a["total_out_eur"]) / a["total_out_eur"] * 100, 1)
+                if a["total_out_eur"] else None,
+                "by_category": rows}
+
+    def recurring_payments(self) -> dict:
+        return self.recurring_fn()
+
+    def find_transactions(self, date_from: str | None = None, date_to: str | None = None,
+                          category: str | None = None, merchant_contains: str | None = None,
+                          direction: str = "any", min_amount_eur: float | None = None, limit: int = 15) -> dict:
+        d0, d1 = _d(date_from, date(2000, 1, 1)), _d(date_to, date.today())
+        needle = (merchant_contains or "").lower()
+        hits = []
+        for t, a in sorted(self._between(d0, d1), key=lambda x: x[0].booking_date, reverse=True):
+            eur = self._eur(t, a)
+            if category and t.category != category:
+                continue
+            if needle and needle not in (t.creditor_name or t.debtor_name or "").lower():
+                continue
+            if direction == "out" and eur >= 0 or direction == "in" and eur <= 0:
+                continue
+            if min_amount_eur is not None and abs(eur) < float(min_amount_eur):
+                continue
+            hits.append({"date": str(t.booking_date), "bank": a.bank, "counterparty": t.creditor_name or t.debtor_name,
+                         "category": t.category, "amount_native": float(t.amount or 0), "currency": t.currency,
+                         "amount_eur": round(eur, 2)})
+            if len(hits) >= max(1, min(int(limit or 15), 25)):
+                break
+        return {"transactions": hits, "count_returned": len(hits)}
+
+    def run(self, name: str, args: dict) -> dict:
+        fn = getattr(self, name, None)
+        if name not in {t["name"] for t in TOOLS} or fn is None:
+            return {"error": f"unknown tool {name}"}
+        try:
+            return fn(**(args or {}))
+        except TypeError as exc:
+            return {"error": f"bad arguments: {exc}"}
+
+
+def answer(question: str, user_id: int, recurring_fn: Callable[[], dict]) -> dict:
+    """Answer one question. Returns answer text, the tool calls made, and bookkeeping."""
+    question = (question or "").strip()[:500]
+    with observability.request("assistant-question", input={"question": question},
+                               tags=["assistant"], metadata={"user_id": user_id}) as req:
+        if not question:
+            return {"answer": "Ask a question about your money.", "tools": [], "refused": False}
+        if _REFUSE.search(question):
+            observability.score("refused_in_code", 1)
+            req.update(output={"answer": REFUSAL, "refused": True})
+            return {"answer": REFUSAL, "tools": [], "refused": True, "trace_id": observability.trace_id()}
+        if not llm.available():
+            return {"answer": "The assistant is unavailable right now (no model key or call budget used).",
+                    "tools": [], "refused": False}
+
+        tools = Tools(user_id, recurring_fn)
+        banks = sorted({c.bank for c in BankConnection.query.filter_by(user_id=user_id, status="active")})
+        system = SYSTEM_TEMPLATE.format(today=date.today().isoformat(), banks=", ".join(banks) or "none",
+                                        coverage=tools.coverage())
+        messages: list[dict] = [{"role": "user", "content": question}]
+        trail: list[dict] = []
+        final_text = ""
+        for round_no in range(MAX_ROUNDS):
+            try:
+                response = llm.create("assistant-turn", system=system, messages=messages, tools=TOOLS,
+                                      max_tokens=MAX_TOKENS, metadata={"round": round_no})
+            except llm.LLMUnavailable as exc:
+                final_text = f"The assistant could not finish: {exc}."
+                break
+            if response.stop_reason != "tool_use":
+                final_text = "".join(b.text for b in response.content if b.type == "text").strip()
+                break
+            messages.append({"role": "assistant", "content": response.content})
+            results = []
+            for block in response.content:
+                if block.type != "tool_use":
+                    continue
+                with observability.step(f"tool:{block.name}", input=block.input) as span:
+                    output = tools.run(block.name, dict(block.input or {}))
+                    span.update(output=output)
+                trail.append({"name": block.name, "input": dict(block.input or {}), "output": output})
+                results.append({"type": "tool_result", "tool_use_id": block.id,
+                                "content": json.dumps(output, default=str)[:12000],
+                                **({"is_error": True} if "error" in output else {})})
+            messages.append({"role": "user", "content": results})
+        else:
+            final_text = "I could not complete this within the tool-call limit. Try a narrower question."
+
+        req.update(output={"answer": final_text, "tool_calls": [t["name"] for t in trail]})
+        observability.score("tool_calls", len(trail))
+        return {"answer": final_text, "tools": trail, "refused": False, "model": llm.MODEL,
+                "context": {"today": date.today().isoformat(), "connected_banks": banks,
+                            "data_coverage": tools.coverage()},
+                "trace_id": observability.trace_id()}

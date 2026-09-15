@@ -12,13 +12,19 @@
     <li>View account details</li>
     <li>View transaction history</li>
   </ul>
-  <p><strong>Validity:</strong> 90 days &nbsp;|&nbsp; <strong>Country:</strong> {{ country }}</p>
+  <p><strong>Validity:</strong> 90 days</p>
 </article>
 
 <p>By clicking <strong>Authorize</strong>, you will be directed to Nordea to confirm this access in accordance with PSD2.</p>
 
 <form method="post" action="{{ url_for('nordea_authorize') }}">
-  <button type="submit">Authorize</button>
+  <label for="country"><strong>Nordea country:</strong></label>
+  <select id="country" name="country" style="margin:0 1rem .75rem .5rem">
+    {% for code, label in [('FI', 'Finland (sandbox user: Aino Salo)'), ('SE', 'Sweden (sandbox user: Margit Alros)'), ('DK', 'Denmark'), ('NO', 'Norway')] %}
+    <option value="{{ code }}" {% if code == country %}selected{% endif %}>{{ label }}</option>
+    {% endfor %}
+  </select>
+  <button type="submit" class="btn btn-primary">Authorize</button>
   <a href="{{ url_for('index') }}" role="button" class="secondary" style="margin-left:1rem;">Cancel</a>
 </form>
 {% endblock %}
