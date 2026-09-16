@@ -158,6 +158,12 @@
         <div style="margin-bottom:2rem">
           <h2 style="font-size:1.625rem;font-weight:800;color:#0f172a;letter-spacing:-.03em;margin-bottom:.35rem">Welcome back</h2>
           <p style="font-size:.8375rem;color:#64748b">Sign in to your FintNet account</p>
+          {% if signed_in_as %}
+          <p style="margin-top:.6rem;font-size:.78rem;color:#4338ca;background:#eef2ff;border:1px solid #e0e7ff;
+                    border-radius:8px;padding:.5rem .65rem">
+            Signed in as <strong>{{ signed_in_as }}</strong>. Signing in below switches to that account.
+          </p>
+          {% endif %}
         </div>
 
         <form method="POST" action="{{ url_for('login') }}" style="display:flex;flex-direction:column;gap:1.125rem">

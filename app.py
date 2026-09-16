@@ -31,7 +31,7 @@ import os
 import time
 import uuid
 from collections import defaultdict
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta, timezone
 from statistics import mean, median
 from urllib.parse import parse_qs, urlparse
 
@@ -596,7 +596,8 @@ with app.app_context():
     for _table, _name, _ddl in (("sb_accounts", "bank", "VARCHAR(20)"),
                                 ("sb_accounts", "role", "VARCHAR(10) NOT NULL DEFAULT 'main'"),
                                 ("sb_transactions", "counterparty_iban", "VARCHAR(34)"),
-                                ("transactions", "counterparty_iban", "VARCHAR(34)")):
+                                ("transactions", "counterparty_iban", "VARCHAR(34)"),
+                                ("users", "last_login_at", "TIMESTAMP")):
         if _name not in {c["name"] for c in _inspect(db.engine).get_columns(_table)}:
             with db.engine.begin() as _conn:
                 _conn.execute(_text(f"ALTER TABLE {_table} ADD COLUMN {_name} {_ddl}"))
@@ -898,23 +899,36 @@ SANDBOX_LOGIN = {
 @app.route("/login", methods=["GET", "POST"])
 def login():
     """Email + password sign-in. Honours `?next=` so flask-login can
-    bounce users back to wherever they were trying to go."""
-    if current_user.is_authenticated:
-        return redirect(url_for("index"))
+    bounce users back to wherever they were trying to go.
+
+    Signing in while another account is open switches to the new one: the old
+    session is dropped first, so nothing of one login reaches the next.
+    """
+    if current_user.is_authenticated and request.method == "GET":
+        # Show the form instead of bouncing home, so a viewer can switch persona.
+        return render_template("login.html", demo_users=[] if _on_ops_host() else DEMO_LOGIN,
+                               demo_password=DEMO_PASSWORD, signed_in_as=current_user.email)
     if request.method == "POST":
         email    = request.form.get("email", "").strip().lower()
         password = request.form.get("password", "")
         user = User.query.filter_by(email=email).first()
         if user and check_password_hash(user.password_hash, password):
+            previous = current_user.email if current_user.is_authenticated else None
+            logout_user()
+            session.clear()     # never carry one account's session into another
             login_user(user)
+            user.last_login_at = datetime.now(timezone.utc)
+            db.session.commit()
             log.info("auth.login.success", extra={"event": "auth.login.success",
-                                                  "user_id": user.id, "email": email})
+                                                  "user_id": user.id, "email": email,
+                                                  "switched_from": previous})
             return redirect(request.args.get("next") or url_for("index"))
         # Don't tell the attacker which half was wrong.
         log.warning("auth.login.failed", extra={"event": "auth.login.failed", "email": email})
         flash("Invalid email or password.", "error")
-    return render_template("login.html",
-                           demo_users=[] if _on_ops_host() else DEMO_LOGIN, demo_password=DEMO_PASSWORD)
+    return render_template("login.html", demo_users=[] if _on_ops_host() else DEMO_LOGIN,
+                           demo_password=DEMO_PASSWORD,
+                           signed_in_as=current_user.email if current_user.is_authenticated else None)
 
 
 @app.route("/signup", methods=["GET", "POST"])
@@ -1604,7 +1618,8 @@ def ops():
         found, error = spl.run(query, records), None
     except spl.SplError as exc:
         found, error = spl.run("", records[:50]), str(exc)
-    return render_template("ops.html", runs=runs, latest=latest, evals=evals,
+    sign_ins = spl.run("event=auth.* | table time, event, email, switched_from | head 12", records)["rows"]
+    return render_template("ops.html", runs=runs, latest=latest, evals=evals, sign_ins=sign_ins,
                            usage=llm.usage(), provider=cat.provider(),
                            query=query, window=window, windows=list(_EVENT_WINDOWS) + ["all"],
                            result=found, search_error=error, event_count=len(records),

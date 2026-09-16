@@ -62,6 +62,7 @@ class User(UserMixin, db.Model):
     # can add more roles without a migration.
     role          = db.Column(db.String(20), nullable=False, default="user")  # "user" | "tpp_admin"
     created_at    = db.Column(db.DateTime, default=_utc_now)
+    last_login_at = db.Column(db.DateTime)
 
     accounts         = db.relationship("Account", back_populates="user")
     bank_connections = db.relationship("BankConnection", back_populates="user",

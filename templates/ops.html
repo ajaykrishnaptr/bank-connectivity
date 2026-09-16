@@ -101,6 +101,27 @@
   </table>
 </div>
 
+<div class="card" style="margin-bottom:1.5rem">
+  <div class="card-label">Recent sign-ins</div>
+  {% if sign_ins %}
+  <table style="margin-top:.5rem">
+    <thead><tr><th>Time (UTC)</th><th>Event</th><th>Account</th><th>Switched from</th></tr></thead>
+    <tbody>
+      {% for s in sign_ins %}
+      <tr>
+        <td class="mono" style="font-size:.72rem;white-space:nowrap">{{ s.time }}</td>
+        <td style="font-size:.75rem">{{ s.event }}</td>
+        <td style="font-size:.75rem">{{ s.email or "—" }}</td>
+        <td class="text-muted" style="font-size:.72rem">{{ s.switched_from or "—" }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <div class="card-meta" style="margin-top:.4rem">No sign-ins recorded in this range.</div>
+  {% endif %}
+</div>
+
 <div class="card">
   <div style="display:flex;align-items:baseline;justify-content:space-between;gap:1rem;flex-wrap:wrap">
     <div class="card-label">Event log search</div>
