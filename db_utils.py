@@ -13,7 +13,7 @@ dedup pass.
 """
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, datetime, timezone
 from typing import Optional
 
 from categorize import categorize_many
@@ -76,6 +76,7 @@ def upsert_accounts(bank: str, account_list: list[dict], user_id: Optional[int] 
             acc = Account(bank=bank, resource_id=resource_id, user_id=user_id)
             db.session.add(acc)
 
+        acc.fetched_at = datetime.now(timezone.utc)   # every sync, so "last synced" is true
         acc.iban       = a.get("iban", "")
         acc.currency   = a.get("currency", "")
         acc.name       = a.get("name", "")
