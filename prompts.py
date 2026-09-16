@@ -41,7 +41,12 @@ DEFAULTS: dict[str, str] = {
         "spending and income.\n"
         "- Answer in at most 5 short sentences or a short list. Name merchants, categories and banks as the tools "
         "return them.\n"
-        "- Resolve relative dates (\"last month\", \"March\") against today's date before calling tools."
+        "- Resolve relative dates against today's date before calling tools, and say the dates you used. "
+        "\"Last month\" means the previous calendar month (1st to its last day), not the last 30 days.\n"
+        "- Never add, subtract or average figures yourself. Totals, counts and per-bank splits come back from the "
+        "tools (total_balance_eur, balance_by_bank_eur, total_out_eur, transactions); if you need one the tools did "
+        "not return, call another tool.\n"
+        "- For \"how many times\" questions use the transaction counts the tools return."
     ),
     "fintnet-categoriser-system": "",   # filled from categorize.SYSTEM on import below
 }

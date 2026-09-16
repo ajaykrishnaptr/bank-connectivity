@@ -5,6 +5,7 @@ Human review in Langfuse: the score schema and the annotation queue.
     python evals/review.py queue [n]      # put the newest assistant answers in the queue
     python evals/review.py queue-bad      # queue only answers a reader marked not useful
     python evals/review.py status         # what is waiting for review
+    python evals/review.py agreement      # how often the judge and a person agree
 
 Scores a reviewer gives here land on the same traces as the automatic ones, so
 one trace carries the code grade, the judge and the human verdict.
@@ -106,6 +107,43 @@ def status() -> None:
     print(f"review at {BASE}/project/<project>/annotation-queues/{q['id']}")
 
 
+PAIRS = [("human_faithful", "judge_faithful"), ("human_in_scope", "judge_stays_in_scope")]
+
+
+def agreement() -> None:
+    """How often the judge agrees with a person, on traces both have scored.
+
+    Until this has a number, judge scores are an opinion. With it, they are a
+    measurement with a known error rate.
+    """
+    scores, page = [], 1
+    while page <= 10:                      # the scores API caps a page at 100
+        batch = _call("GET", f"/api/public/scores?limit=100&page={page}")
+        scores += batch["data"]
+        if page >= batch["meta"]["totalPages"]:
+            break
+        page += 1
+    by_trace: dict[str, dict[str, float]] = {}
+    for s in scores:
+        trace = s.get("traceId")
+        if trace and s.get("value") is not None:
+            by_trace.setdefault(trace, {})[s["name"]] = float(s["value"])
+    print(f"{len(by_trace)} traces carry scores")
+    for human, judge in PAIRS:
+        both = [(v[human], v[judge]) for v in by_trace.values() if human in v and judge in v]
+        if not both:
+            print(f"{human} vs {judge}: no trace has both yet "
+                  f"(review some answers in the {QUEUE_NAME} queue first)")
+            continue
+        same = sum(1 for h, j in both if (h >= 0.5) == (j >= 0.5))
+        print(f"{human} vs {judge}: {same}/{len(both)} agree ({same / len(both):.0%})")
+    quality = [(v["human_quality"], v.get("judge_overall")) for v in by_trace.values()
+               if "human_quality" in v and v.get("judge_overall") is not None]
+    if quality:
+        gap = sum(abs(h * 2.5 - j) for h, j in quality) / len(quality)   # human 0-2 scaled to the judge's 1-5
+        print(f"human_quality vs judge_overall: {len(quality)} pairs, average gap {gap:.2f} of 5")
+
+
 if __name__ == "__main__":
     command = sys.argv[1] if len(sys.argv) > 1 else "status"
     if command == "setup":
@@ -114,5 +152,7 @@ if __name__ == "__main__":
         queue(int(sys.argv[2]) if len(sys.argv) > 2 else 10)
     elif command == "queue-bad":
         queue(20, only_bad=True)
+    elif command == "agreement":
+        agreement()
     else:
         status()

@@ -44,10 +44,10 @@ REFUSAL = ("I can't help with credit, loans or investment decisions. I can answe
 
 TOOLS: list[dict] = [
     {"name": "list_accounts",
-     "description": "All connected accounts with bank, currency, balance in native currency and EUR, and the first and last transaction date. Call this to learn what data exists.",
+     "description": "All connected accounts with bank, currency, balance in native currency and EUR, the first and last transaction date, plus the total balance, the balance per bank and the number of accounts per bank. Call this to learn what data exists.",
      "input_schema": {"type": "object", "properties": {}, "additionalProperties": False}},
     {"name": "spending_by_category",
-     "description": "Money paid out per category between two dates (inclusive), in EUR, with transaction counts. Optional bank filter.",
+     "description": "Money paid out per category between two dates (inclusive), in EUR, with transaction counts per category and in total. Optional bank filter. Use this for \"how much\" and \"how many times\" questions about a period.",
      "input_schema": {"type": "object", "properties": {
          "date_from": {"type": "string", "description": "YYYY-MM-DD"},
          "date_to": {"type": "string", "description": "YYYY-MM-DD"},
@@ -132,7 +132,14 @@ class Tools:
                         "first_transaction": str(min(dates)) if dates else None,
                         "last_transaction": str(max(dates)) if dates else None,
                         "transactions": len(acc.transactions)})
-        return {"accounts": out, "note": "balance = sum of stored transactions"}
+        by_bank: dict[str, float] = defaultdict(float)
+        for a in out:
+            by_bank[a["bank"]] += a["balance_eur"]
+        return {"accounts": out,
+                "total_balance_eur": round(sum(a["balance_eur"] for a in out), 2),
+                "balance_by_bank_eur": {b: round(v, 2) for b, v in sorted(by_bank.items())},
+                "accounts_by_bank": {b: sum(1 for a in out if a["bank"] == b) for b in sorted(by_bank)},
+                "note": "balance = sum of stored transactions; totals are computed here, do not add them up yourself"}
 
     def spending_by_category(self, date_from: str, date_to: str, bank: str | None = None) -> dict:
         d0, d1 = _d(date_from, date.today() - timedelta(days=30)), _d(date_to, date.today())
@@ -145,7 +152,7 @@ class Tools:
                       key=lambda x: -x["eur"])
         total = round(sum(totals.values()), 2)
         return {"date_from": str(d0), "date_to": str(d1), "bank": bank or "all", "categories": cats,
-                "total_out_eur": total,
+                "total_out_eur": total, "transactions": sum(counts.values()),
                 "total_out_excluding_transfers_eur": round(total - totals.get("Transfers / Other", 0), 2)}
 
     def top_merchants(self, date_from: str, date_to: str, category: str | None = None, limit: int = 10) -> dict:

@@ -22,6 +22,7 @@ Without Langfuse keys the same task and evaluators run locally.
 from __future__ import annotations
 
 import hashlib
+import os
 import random
 import subprocess
 from collections import defaultdict
@@ -105,20 +106,52 @@ def benchmark_items(size: int = 300) -> list[dict]:
 
 # ── Task and evaluators ──────────────────────────────────────────────────────
 
+# Which kind of hard case a merchant string is, so the run says what actually hurts.
+_FACILITATOR = ("SQ *", "SP ", "PAYPAL *", "SUMUP *", "IZ *", "ZTL*", "PP*")
+
+
+def _hard_case(meta: dict | None) -> str:
+    merchant = ((meta or {}).get("merchant_truth") or "")
+    if any(merchant.upper().startswith(p) for p in _FACILITATOR):
+        return "hard:facilitator"
+    if merchant.isupper() and len(merchant) <= 14:
+        return "hard:truncated"
+    return "hard:typo_or_misleading"
+
+
+def _margin(pair: list[int]) -> float | None:
+    """Half-width of the 95% interval around an accuracy, given the sample."""
+    correct, total = pair
+    if not total:
+        return None
+    p = correct / total
+    return round(1.96 * ((p * (1 - p) / total) ** 0.5), 3)
+
+
 def _field(obj: Any, name: str) -> Any:
     return obj.get(name) if isinstance(obj, dict) else getattr(obj, name, None)
 
 
 def task(*, item, **_) -> dict:
+    """Three answers per item, so the run compares what ships with what the model alone does.
+
+      shipped  what production returns at insert time: overrides, then the cache,
+               then rules (`categorize_detailed()`), the category a customer sees
+               until the nightly job upgrades it
+      model    the model on its own, uncached
+      rules    the keyword baseline
+    """
     x = _field(item, "input")
     rules = cat._categorize_by_rules(x["merchant"])
+    shipped, shipped_source = cat.categorize_detailed(x["merchant"])
     try:
         answer = cat.model_categorize(x["merchant"], x.get("remittance", ""), x.get("amount"),
                                       name="evaluate-categorise")
         return {"category": answer["category"], "confidence": answer["confidence"], "reason": answer["reason"],
-                "rules": rules, "mode": "model"}
+                "rules": rules, "shipped": shipped, "shipped_source": shipped_source, "mode": "model"}
     except llm.LLMUnavailable as exc:
-        return {"category": None, "confidence": None, "reason": str(exc)[:200], "rules": rules, "mode": "failed"}
+        return {"category": None, "confidence": None, "reason": str(exc)[:200], "rules": rules,
+                "shipped": shipped, "shipped_source": shipped_source, "mode": "failed"}
 
 
 def item_evaluator(*, output, expected_output, **_):
@@ -127,12 +160,16 @@ def item_evaluator(*, output, expected_output, **_):
     truth = expected_output["category"]
     return [Evaluation(name="category_correct", value=1.0 if output["category"] == truth else 0.0,
                        comment=f"expected {truth}, got {output['category']} ({output['confidence']})"),
+            Evaluation(name="shipped_correct", value=1.0 if output.get("shipped") == truth else 0.0,
+                       comment=f"via {output.get('shipped_source')}"),
             Evaluation(name="rules_correct", value=1.0 if output["rules"] == truth else 0.0)]
 
 
 def summarise(pairs: list[tuple[dict, dict, dict]]) -> dict:
     """pairs of (output, expected_output, metadata) -> accuracy figures."""
     model, rules = defaultdict(lambda: [0, 0]), defaultdict(lambda: [0, 0])
+    shipped = defaultdict(lambda: [0, 0])
+    by_category, by_case, confusions = defaultdict(lambda: [0, 0]), defaultdict(lambda: [0, 0]), defaultdict(int)
     calib = {b: [0, 0] for b in _BUCKETS}
     failures, errors = 0, []
     for out, exp, meta in pairs:
@@ -140,6 +177,8 @@ def summarise(pairs: list[tuple[dict, dict, dict]]) -> dict:
         for key in ("all", slice_):
             rules[key][0] += int(out["rules"] == truth)
             rules[key][1] += 1
+            shipped[key][0] += int(out.get("shipped") == truth)
+            shipped[key][1] += 1
         if out["mode"] != "model":
             failures += 1
             continue
@@ -147,6 +186,13 @@ def summarise(pairs: list[tuple[dict, dict, dict]]) -> dict:
         for key in ("all", slice_):
             model[key][0] += int(ok)
             model[key][1] += 1
+        by_category[truth][0] += int(ok)
+        by_category[truth][1] += 1
+        case = _hard_case(meta) if slice_ == "hard" else slice_
+        by_case[case][0] += int(ok)
+        by_case[case][1] += 1
+        if not ok:
+            confusions[f"{truth} -> {out['category']}"] += 1
         bucket = next(b for b in _BUCKETS if b[0] <= out["confidence"] <= b[1])
         calib[bucket][0] += int(ok)
         calib[bucket][1] += 1
@@ -157,11 +203,18 @@ def summarise(pairs: list[tuple[dict, dict, dict]]) -> dict:
     def acc(p):
         return round(p[0] / p[1], 3) if p[1] else None
 
+    n_all = rules["all"][1]
     return {"model_accuracy": {k: acc(v) for k, v in model.items()},
+            "shipped_accuracy": {k: acc(v) for k, v in shipped.items()},
             "rules_accuracy": {k: acc(v) for k, v in rules.items()},
             "n": {k: v[1] for k, v in rules.items()},
+            # ±1.96 standard errors on the headline figure, so a normal wobble is not read as drift
+            "model_accuracy_margin": _margin(model["all"]),
+            "by_category": {k: {"accuracy": acc(v), "n": v[1]} for k, v in sorted(by_category.items())},
+            "by_case": {k: {"accuracy": acc(v), "n": v[1]} for k, v in sorted(by_case.items())},
+            "top_confusions": dict(sorted(confusions.items(), key=lambda kv: -kv[1])[:8]),
             "calibration": {f"{lo}-{hi}": {"accuracy": acc(v), "n": v[1]} for (lo, hi), v in calib.items()},
-            "model_failures": failures, "errors": errors}
+            "model_failures": failures, "errors": errors, "sample_size": n_all}
 
 
 def run_evaluator(*, item_results, **_):
@@ -169,10 +222,11 @@ def run_evaluator(*, item_results, **_):
 
     s = summarise([(r.output, _field(r.item, "expected_output"), _field(r.item, "metadata")) for r in item_results])
     evals = [Evaluation(name="model_failures", value=float(s["model_failures"]))]
-    for engine in ("model", "rules"):
+    for engine in ("model", "shipped", "rules"):
         for key, value in s[f"{engine}_accuracy"].items():
             if value is not None:
-                name = ("accuracy" if engine == "model" else "rules_accuracy") + ("" if key == "all" else f"_{key}")
+                prefix = {"model": "accuracy", "shipped": "shipped_accuracy", "rules": "rules_accuracy"}[engine]
+                name = prefix + ("" if key == "all" else f"_{key}")
                 evals.append(Evaluation(name=name, value=value, comment=f"n={s['n'].get(key)}"))
     for bucket, v in s["calibration"].items():
         if v["accuracy"] is not None:
@@ -225,5 +279,30 @@ def run_daily(day: date, size: int = 150) -> dict:
                          description=f"Stratified sample of {len(items)} synthetic transactions booked {target}")
     summary["booking_date"] = target.isoformat()
     summary["sample_size"] = len(items)
-    summary["status"] = "ok" if summary["model_accuracy"].get("all") is not None else "error"
+    summary.update(gate(summary))
     return summary
+
+
+def gate(summary: dict) -> dict:
+    """Turn the run into a pass or a fail, so a bad day is not reported as ok.
+
+    error  the model could not answer, or it fell below EVAL_MIN_ACCURACY (0.85)
+    warn   it no longer beats the keyword rules by EVAL_MIN_MARGIN (0.05), or too
+           many calls failed
+    """
+    accuracy = (summary.get("model_accuracy") or {}).get("all")
+    rules = (summary.get("rules_accuracy") or {}).get("all") or 0.0
+    floor = float(os.getenv("EVAL_MIN_ACCURACY", "0.85"))
+    margin = float(os.getenv("EVAL_MIN_MARGIN", "0.05"))
+    failures = summary.get("model_failures", 0)
+    sample = summary.get("sample_size") or 0
+    if accuracy is None:
+        return {"status": "error", "gate": "the model returned nothing to score"}
+    if accuracy < floor:
+        return {"status": "error", "gate": f"accuracy {accuracy:.3f} below the floor {floor:.2f}"}
+    if accuracy - rules < margin:
+        return {"status": "warn", "gate": f"accuracy {accuracy:.3f} is within {margin:.2f} of the rules {rules:.3f}"}
+    if sample and failures / sample > 0.05:
+        return {"status": "warn", "gate": f"{failures} of {sample} model calls failed"}
+    return {"status": "ok", "gate": f"accuracy {accuracy:.3f} ± {summary.get('model_accuracy_margin')} "
+                                    f"beats rules {rules:.3f}"}
