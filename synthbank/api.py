@@ -88,8 +88,8 @@ def authorise(consent_id):
         return _error(exc)
     if cust is None or cust.demo_email != (current_user.email or "").lower():
         return _error(client.SynthBankError("Consent belongs to a different customer", status_code=403))
-    if not accts:
-        log.info("synthbank.login_failed", extra={"event": "synthbank.login_failed", "bank": bank,
-                                                   "customer_id": cust.customer_id})
+    log.info("bank.signin", extra={
+        "event": "bank.signin.failed" if not accts else "bank.signin.ok", "bank": bank, "data": "generated",
+        "customer_id": cust.customer_id, "customer": cust.name, "accounts": len(accts)})
     return render_template("synthbank_sca.html", consent_id=consent_id, accounts=accts, bank=bank,
                            bank_label=catalog.BANK_LABEL.get(bank, "Synthetic Bank"), customer=cust.name)

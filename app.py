@@ -556,6 +556,26 @@ def _on_ops_host() -> bool:
 
 
 @app.before_request
+def _start_timer():
+    request.environ["_started"] = time.time()
+
+
+@app.after_request
+def _log_request(response):
+    """One event per HTTP request: the access log of the app."""
+    endpoint = (request.endpoint or "").split(".")[0]
+    if endpoint != "static":
+        log.info("http.request", extra={
+            "event": "http.request", "method": request.method, "path": request.path,
+            "endpoint": request.endpoint, "status_code": response.status_code,
+            "latency_ms": int((time.time() - request.environ.get("_started", time.time())) * 1000),
+            "user_id": getattr(current_user, "id", None) if current_user else None,
+            "host": request.host.split(":")[0], "view": "ops" if _on_ops_host() else "product",
+        })
+    return response
+
+
+@app.before_request
 def _split_product_and_ops():
     """Keep the two views apart: no operations page on the product host, and no
     product pages on the operations host."""
@@ -1544,6 +1564,8 @@ def connect_bank(bank):
     if cust is None or synthbank_store.home_bank(cust.customer_id) == bank:
         return redirect(url_for(_LIVE_CONNECT[bank]))
     consent = synthbank_client.create_consent(cust.customer_id, bank)
+    log.info("consent.created", extra={"event": "consent.created", "bank": bank, "data": "generated",
+                                       "user_id": current_user.id, "customer_id": cust.customer_id})
     return redirect(consent["_links"]["scaRedirect"]["href"])
 
 
@@ -1555,6 +1577,8 @@ def synthbank_callback():
     try:
         bank = synthbank_client.bank_for(consent_id)
         if request.form.get("decision") != "approve":
+            log.info("consent.refused", extra={"event": "consent.refused", "bank": bank,
+                                               "data": "generated", "user_id": current_user.id})
             flash("Consent refused. Nothing was connected.", "info")
             return redirect(url_for("index"))
         cust = _demo_customer()
@@ -1602,7 +1626,16 @@ def ask():
     question = ""
     if request.method == "POST":
         question = request.form.get("question", "").strip()
+        asked_at = time.time()
         result = assistant.answer(question, current_user.id, _recurring_summary)
+        log.info("assistant.answered", extra={
+            "event": "assistant.refused" if result.get("refused") else "assistant.answered",
+            "user_id": current_user.id, "question": question[:200], "refused": bool(result.get("refused")),
+            "tool_calls": len(result.get("tools") or []),
+            "tools": ",".join(t["name"] for t in (result.get("tools") or [])),
+            "model": result.get("model"), "trace_id": result.get("trace_id"),
+            "latency_ms": int((time.time() - asked_at) * 1000),
+        })
         history = session.get("ask_history", [])
         history.insert(0, {"q": question[:200], "a": (result.get("answer") or "")[:600]})
         session["ask_history"] = history[:4]
@@ -1622,31 +1655,80 @@ def ask():
 
 _EVENT_WINDOWS = {"15m": 900, "1h": 3600, "24h": 86400, "7d": 604800}
 _SPL_EXAMPLES = [
+    ("Bank API calls", "event=bank.api.call | table time, bank, method, host, path, status_code, latency_ms | sort -time"),
+    ("Calls per bank", "event=bank.api.call | stats count, avg(latency_ms) as avg_ms by bank, host"),
     ("Bank syncs", "event=sync.complete | table time, bank, data, account_count, latency_ms | sort -time"),
-    ("Logins", "event=auth.* | table time, event, email"),
-    ("Bank connections", "event=connection.* | table time, event, bank, user_id"),
-    ("Assistant tool calls", "sourcetype=fintnet:tool | stats count by name"),
-    ("Slowest requests", "sourcetype=fintnet:request | table time, name, duration_ms | sort -duration_ms | head 10"),
+    ("Sign-ins", "event=auth.* | table time, event, email, switched_from"),
+    ("Consents", "event=consent.* OR event=bank.signin.* | table time, event, bank, customer"),
+    ("Assistant", "event=assistant.* | table time, event, question, tool_calls, latency_ms"),
+    ("Assistant tools", "sourcetype=fintnet:tool | stats count by name"),
+    ("Slow requests", "event=http.request | table time, method, path, status_code, latency_ms | sort -latency_ms | head 20"),
+    ("Traffic by page", "event=http.request view=product | stats count by path"),
     ("Job runs", "sourcetype=fintnet:cron | stats count by name, status"),
-    ("Anything that failed", "status=error"),
+    ("Failures", "status=error"),
 ]
+_OPS_TABS = (("overview", "Overview"), ("search", "Search"), ("jobs", "Jobs"), ("trust", "Trust chain"))
+# Fields worth summarising beside search results, in the order they are shown.
+_FACET_FIELDS = ("event", "sourcetype", "bank", "status", "status_code", "path", "name", "email", "data", "view")
+
+
+def _histogram(rows: list[dict], window: str) -> list[dict]:
+    """Event counts per time bucket, for the bar chart above the results."""
+    if not rows:
+        return []
+    seconds = _EVENT_WINDOWS.get(window, 86400)
+    buckets = 24 if window != "15m" else 15
+    size = max(60, seconds // buckets)
+    now = time.time()
+    counts: dict[int, int] = {i: 0 for i in range(buckets)}
+    for r in rows:
+        raw = (r.get("_raw") or {}).get("time")
+        if raw is None:
+            continue
+        index = int((now - float(raw)) // size)
+        if 0 <= index < buckets:
+            counts[buckets - 1 - index] += 1
+    top = max(counts.values()) or 1
+    return [{"count": c, "height": round(c / top * 100)} for _, c in sorted(counts.items())]
+
+
+def _facets(rows: list[dict], limit: int = 5) -> list[dict]:
+    """Top values per field, the way a log tool lists interesting fields."""
+    out = []
+    for field in _FACET_FIELDS:
+        values: dict[str, int] = defaultdict(int)
+        for r in rows:
+            value = r.get(field)
+            if value not in (None, ""):
+                values[str(value)] += 1
+        if values:
+            top = sorted(values.items(), key=lambda kv: -kv[1])[:limit]
+            out.append({"field": field, "distinct": len(values),
+                        "top": [{"value": v, "count": c} for v, c in top]})
+    return out
 
 
 @app.route("/ops")
 @login_required
 def ops():
-    """Cron runs, the latest categoriser evaluation, trust-chain health, model usage and recent events.
+    """The internal console: job runs, the categoriser evaluation, the trust
+    chain and an event log searched with an SPL subset.
 
-    Internal view: only an admin account can open it, and on the operations host
-    (OPS_HOST) it is the only page served."""
+    Only an admin account can open it, and on the operations host (OPS_HOST)
+    it is the only page served. Model traces and evaluation detail stay in
+    Langfuse; this page links there rather than copying its numbers.
+    """
     if current_user.role != "tpp_admin":
         abort(404)
+    tab = request.args.get("tab", "overview")
+    if tab not in dict(_OPS_TABS):
+        tab = "overview"
     runs = JobRun.query.order_by(JobRun.run_date.desc(), JobRun.job).limit(40).all()
     latest = {job: JobRun.query.filter_by(job=job).order_by(JobRun.run_date.desc()).first()
               for job in ("feed", "categorise", "evaluate", "health")}
     evals = (JobRun.query.filter_by(job="evaluate").filter(JobRun.status.in_(["ok", "warn"]))
              .order_by(JobRun.run_date.desc()).limit(14).all())
-    # Event search, Splunk style: spl.py runs the query over the stored HEC records.
+
     query = request.args.get("q", "")
     window = request.args.get("range", "24h")
     since = time.time() - _EVENT_WINDOWS.get(window, 86400) if window != "all" else 0
@@ -1655,12 +1737,20 @@ def ops():
     try:
         found, error = spl.run(query, records), None
     except spl.SplError as exc:
-        found, error = spl.run("", records[:50]), str(exc)
-    sign_ins = spl.run("event=auth.* | table time, event, email, switched_from | head 12", records)["rows"]
-    return render_template("ops.html", runs=runs, latest=latest, evals=evals, sign_ins=sign_ins,
-                           usage=llm.usage(), provider=cat.provider(),
+        found, error = spl.run("", records), str(exc)
+    matched = found["rows"] if not found["stats"] else spl.run(query.split("|")[0], records)["rows"]
+
+    counts = {"events": len(records),
+              "errors": len(spl.run("status=error", records)["rows"]),
+              "bank_calls": len(spl.run("event=bank.api.call", records)["rows"]),
+              "requests": len(spl.run("event=http.request", records)["rows"])}
+    return render_template("ops.html", tab=tab, tabs=_OPS_TABS, runs=runs, latest=latest, evals=evals,
+                           provider=cat.provider(), model=llm.MODEL,
+                           sign_ins=spl.run("event=auth.* | table time, event, email, switched_from | head 12",
+                                            records)["rows"],
                            query=query, window=window, windows=list(_EVENT_WINDOWS) + ["all"],
-                           result=found, search_error=error, event_count=len(records),
+                           result=found, search_error=error, counts=counts,
+                           histogram=_histogram(matched, window), facets=_facets(matched),
                            event_store=eventlog.backend(), examples=_SPL_EXAMPLES)
 
 

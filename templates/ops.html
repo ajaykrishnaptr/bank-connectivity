@@ -1,201 +1,290 @@
 {% extends "base.html" %}
 {% block content %}
 <style>
-  .ops-json { font-family: var(--font-mono); font-size: .7rem; white-space: pre-wrap; color: var(--text-2);
-              max-height: 320px; overflow: auto; background: var(--surface-2); padding: .75rem 1rem; }
-  .status-ok { background: var(--green-bg); color: #14532d; }
-  .status-warn { background: var(--amber-bg); color: #78350f; }
-  .status-error { background: var(--red-bg); color: #7f1d1d; }
-  .status-running { background: var(--accent-bg); color: var(--accent-hover); }
+  /* A console, not a product page: dark, dense, monospace by default. */
+  .console { --bg:#0b1220; --panel:#111a2b; --panel-2:#0e1626; --line:#1f2b41; --ink:#dbe5f3;
+             --dim:#7f90a8; --accent:#5eead4; --warn:#fbbf24; --bad:#f87171; --good:#34d399;
+             background:var(--bg); color:var(--ink); margin:-1.5rem -1rem; padding:1rem 1.25rem 3rem;
+             font-family:var(--font-mono); font-size:.78rem; min-height:100vh; }
+  .console h2, .console h3 { font-family:var(--font-mono); letter-spacing:-.01em; color:var(--ink); }
+  .console a { color:var(--accent); }
+  .c-top { display:flex; align-items:center; justify-content:space-between; gap:1rem; flex-wrap:wrap;
+           border-bottom:1px solid var(--line); padding-bottom:.75rem; margin-bottom:.9rem; }
+  .c-title { font-size:.95rem; font-weight:700; letter-spacing:.02em; }
+  .c-title span { color:var(--dim); font-weight:400; margin-left:.5rem; font-size:.72rem; }
+  .c-tabs { display:flex; gap:.25rem; }
+  .c-tab { padding:.3rem .7rem; border:1px solid var(--line); border-radius:5px; color:var(--dim);
+           text-decoration:none; font-size:.74rem; }
+  .c-tab:hover { border-color:#2c3c58; color:var(--ink); }
+  .c-tab.on { background:#16233a; color:var(--accent); border-color:#27405f; }
+  .c-stats { display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); gap:.6rem; margin-bottom:.9rem; }
+  .c-stat { background:var(--panel); border:1px solid var(--line); border-radius:6px; padding:.6rem .75rem; }
+  .c-stat b { display:block; font-size:1.15rem; font-weight:700; margin-top:.15rem; }
+  .c-stat small { color:var(--dim); text-transform:uppercase; letter-spacing:.09em; font-size:.62rem; }
+  .c-panel { background:var(--panel); border:1px solid var(--line); border-radius:6px; padding:.85rem 1rem; margin-bottom:.9rem; }
+  .c-panel > h3 { font-size:.72rem; text-transform:uppercase; letter-spacing:.09em; color:var(--dim);
+                  margin-bottom:.6rem; font-weight:600; }
+  .c-grid { display:grid; grid-template-columns:1fr 1fr; gap:.9rem; }
+  @media (max-width:900px) { .c-grid { grid-template-columns:1fr; } }
+  .console table { width:100%; border-collapse:collapse; font-size:.73rem; }
+  .console th { text-align:left; color:var(--dim); font-weight:600; text-transform:uppercase; letter-spacing:.06em;
+                font-size:.62rem; padding:.3rem .5rem; border-bottom:1px solid var(--line); white-space:nowrap; }
+  .console td { padding:.3rem .5rem; border-bottom:1px solid #16203312; color:var(--ink); vertical-align:top; }
+  .console tbody tr:nth-child(even) { background:#0d1524; }
+  .console tbody tr:hover { background:#152134; }
+  .num { text-align:right; }
+  .c-chip { display:inline-block; padding:.05rem .4rem; border-radius:4px; font-size:.65rem; border:1px solid; }
+  .ok    { color:var(--good); border-color:#14532d; background:#052e1d; }
+  .warn  { color:var(--warn); border-color:#78350f; background:#2a1c05; }
+  .error { color:var(--bad);  border-color:#7f1d1d; background:#2a0d0d; }
+  .running { color:#93c5fd; border-color:#1e3a8a; background:#0c1a33; }
+  .c-search { display:flex; gap:.5rem; flex-wrap:wrap; }
+  .c-search input, .c-search select { background:var(--panel-2); border:1px solid var(--line); color:var(--ink);
+      font-family:var(--font-mono); font-size:.78rem; padding:.45rem .6rem; border-radius:5px; }
+  .c-search input { flex:1; min-width:300px; }
+  .c-search button { background:#16233a; color:var(--accent); border:1px solid #27405f; border-radius:5px;
+      padding:.45rem .9rem; font-family:var(--font-mono); font-size:.75rem; cursor:pointer; }
+  .c-saved { display:flex; gap:.35rem; flex-wrap:wrap; margin-top:.55rem; }
+  .c-saved a { font-size:.68rem; color:var(--dim); text-decoration:none; border:1px solid var(--line);
+               border-radius:4px; padding:.15rem .45rem; }
+  .c-saved a:hover { color:var(--accent); border-color:#27405f; }
+  .c-hist { display:flex; align-items:flex-end; gap:2px; height:52px; margin:.8rem 0 .3rem; }
+  .c-hist div { flex:1; background:#1d4ed8; opacity:.75; border-radius:1px 1px 0 0; min-height:1px; }
+  .c-hist div:hover { opacity:1; background:var(--accent); }
+  .c-layout { display:grid; grid-template-columns:200px 1fr; gap:.9rem; }
+  @media (max-width:900px) { .c-layout { grid-template-columns:1fr; } }
+  .c-facet { border-bottom:1px solid var(--line); padding:.45rem 0; }
+  .c-facet b { color:var(--ink); font-size:.7rem; }
+  .c-facet span { color:var(--dim); font-size:.62rem; }
+  .c-facet a { display:flex; justify-content:space-between; gap:.4rem; text-decoration:none; color:var(--dim);
+               font-size:.68rem; padding:.1rem 0; }
+  .c-facet a:hover { color:var(--accent); }
+  .c-raw { font-size:.68rem; white-space:pre-wrap; color:#9fb3cd; background:var(--panel-2);
+           border:1px solid var(--line); border-radius:4px; padding:.5rem .6rem; max-height:280px; overflow:auto; }
+  .c-err { border:1px solid #7f1d1d; background:#2a0d0d; color:#fca5a5; border-radius:5px; padding:.45rem .6rem;
+           margin-top:.5rem; font-size:.72rem; }
+  .c-note { color:var(--dim); font-size:.68rem; }
 </style>
 
-<div style="margin-bottom:1.25rem">
-  <h2>Operations</h2>
-  <p class="text-muted" style="font-size:.85rem;margin-top:.25rem">
-    Internal view, separate from the product. Daily jobs on Vercel Cron, the categoriser evaluation,
-    trust-chain health for the live sandboxes, and the event log. Model traces, tokens, cost and evaluation
-    detail live in <a href="https://cloud.langfuse.com" target="_blank" rel="noopener">Langfuse</a>.
-  </p>
-</div>
-
-<div class="grid grid-4" style="margin-bottom:1.5rem">
-  {% for job in ['feed', 'categorise', 'evaluate', 'health'] %}
-  {% set r = latest[job] %}
-  <div class="card">
-    <div class="card-label">{{ job }}</div>
-    {% if r %}
-    <div style="margin-top:.4rem"><span class="pill status-{{ r.status }}">{{ r.status }}</span></div>
-    <div class="card-meta">{{ r.run_date }}{% if r.finished_at %} · done {{ r.finished_at.strftime('%H:%M') }} UTC{% endif %}</div>
-    {% else %}
-    <div class="card-meta">never run</div>
-    {% endif %}
-  </div>
-  {% endfor %}
-</div>
-
-<div class="grid grid-2" style="margin-bottom:1.5rem">
-  <div class="card">
-    <div class="card-label">Categoriser accuracy by day (model vs rules)</div>
-    {% if evals %}
-    <table style="margin-top:.5rem">
-      <thead><tr><th>Booking date</th><th class="num">n</th><th class="num">Model</th><th class="num">New merchants</th>
-        <th class="num">Hard cases</th><th class="num">Rules</th></tr></thead>
-      <tbody>
-      {% for e in evals %}{% set d = e.details or {} %}
-      <tr>
-        <td class="mono" style="font-size:.75rem">{{ d.booking_date or e.run_date }}
-          {% if d.dataset_run_url %}<a href="{{ d.dataset_run_url }}" target="_blank" rel="noopener" style="font-size:.7rem">run ↗</a>{% endif %}</td>
-        <td class="num">{{ d.sample_size }}</td>
-        <td class="num">{{ '%.0f%%' % (d.model_accuracy.all * 100) if d.model_accuracy and d.model_accuracy.all is not none else '—' }}</td>
-        <td class="num">{{ '%.0f%%' % (d.model_accuracy.novel * 100) if d.model_accuracy and d.model_accuracy.novel is not none else '—' }}</td>
-        <td class="num">{{ '%.0f%%' % (d.model_accuracy.hard * 100) if d.model_accuracy and d.model_accuracy.hard is not none else '—' }}</td>
-        <td class="num">{{ '%.0f%%' % (d.rules_accuracy.all * 100) if d.rules_accuracy and d.rules_accuracy.all is not none else '—' }}</td>
-      </tr>
+<div class="console">
+  <div class="c-top">
+    <div class="c-title">fintnet · operations <span>{{ event_store or 'no event store' }} · {{ counts.events }} events in range</span></div>
+    <div class="c-tabs">
+      {% for key, label in tabs %}
+      <a class="c-tab {% if tab == key %}on{% endif %}" href="{{ url_for('ops', tab=key, range=window) }}">{{ label }}</a>
       {% endfor %}
-      </tbody>
-    </table>
-    {% else %}
-    <div class="card-meta">No evaluation has run yet.</div>
-    {% endif %}
-  </div>
-
-  <div class="card">
-    <div class="card-label">Model and categoriser</div>
-    <table style="margin-top:.5rem">
-      <tr><td>Categoriser provider</td><td class="mono">{{ provider }}</td></tr>
-      <tr><td>Model</td><td class="mono">{{ usage.model }}</td></tr>
-      <tr><td>Traces and evaluations</td><td><a href="https://cloud.langfuse.com" target="_blank" rel="noopener">Langfuse ↗</a></td></tr>
-      <tr><td>Model available</td><td class="mono">{{ usage.available }}</td></tr>
-    </table>
-    {% set h = latest['health'] %}
-    {% if h and h.details %}
-    <div class="card-label" style="margin-top:1rem">Trust chain</div>
-    <table style="margin-top:.4rem">
-      <tr><td>CRL</td><td><span class="pill status-{{ h.details.crl.status }}">{{ h.details.crl.status }}</span>
-        <span class="mono" style="font-size:.72rem">{{ h.details.crl.days_left }} days left</span></td></tr>
-      <tr><td>OCSP (UniCredit leaf)</td><td><span class="pill status-{{ h.details.ocsp.status }}">{{ h.details.ocsp.certificate_status or h.details.ocsp.status }}</span></td></tr>
-      {% for name, c in (h.details.certificates or {}).items() %}
-      <tr><td>{{ name }}</td><td><span class="pill status-{{ c.status }}">{{ c.status }}</span>
-        <span class="mono" style="font-size:.72rem">{{ c.days_left if c.days_left is defined else c.error }}{% if c.days_left is defined %} days{% endif %}</span></td></tr>
-      {% endfor %}
-    </table>
-    {% endif %}
-  </div>
-</div>
-
-<div class="card" style="margin-bottom:1.5rem">
-  <div class="card-label">Job runs</div>
-  <table style="margin-top:.5rem">
-    <thead><tr><th>Date</th><th>Job</th><th>Status</th><th>Details</th></tr></thead>
-    <tbody>
-    {% for r in runs %}
-    <tr>
-      <td class="mono" style="font-size:.75rem">{{ r.run_date }}</td>
-      <td>{{ r.job }}</td>
-      <td><span class="pill status-{{ r.status }}">{{ r.status }}</span></td>
-      <td><details style="margin:0"><summary><span class="arrow">▶</span> show</summary>
-        <div class="ops-json">{{ r.details | tojson(indent=2) }}</div></details></td>
-    </tr>
-    {% endfor %}
-    </tbody>
-  </table>
-</div>
-
-<div class="card" style="margin-bottom:1.5rem">
-  <div class="card-label">Recent sign-ins</div>
-  {% if sign_ins %}
-  <table style="margin-top:.5rem">
-    <thead><tr><th>Time (UTC)</th><th>Event</th><th>Account</th><th>Switched from</th></tr></thead>
-    <tbody>
-      {% for s in sign_ins %}
-      <tr>
-        <td class="mono" style="font-size:.72rem;white-space:nowrap">{{ s.time }}</td>
-        <td style="font-size:.75rem">{{ s.event }}</td>
-        <td style="font-size:.75rem">{{ s.email or "—" }}</td>
-        <td class="text-muted" style="font-size:.72rem">{{ s.switched_from or "—" }}</td>
-      </tr>
-      {% endfor %}
-    </tbody>
-  </table>
-  {% else %}
-  <div class="card-meta" style="margin-top:.4rem">No sign-ins recorded in this range.</div>
-  {% endif %}
-</div>
-
-<div class="card">
-  <div style="display:flex;align-items:baseline;justify-content:space-between;gap:1rem;flex-wrap:wrap">
-    <div class="card-label">Event log search</div>
-    <div class="text-muted" style="font-size:.7rem">
-      {{ event_count }} events in range · store: {{ event_store or 'off' }} · Splunk HEC format, searched with an SPL subset
+      <a class="c-tab" href="https://cloud.langfuse.com" target="_blank" rel="noopener">Langfuse ↗</a>
     </div>
   </div>
 
-  <form method="get" style="display:flex;gap:.5rem;margin-top:.6rem;flex-wrap:wrap">
-    <input name="q" value="{{ query }}" placeholder="event=assistant.* | stats count by event" autocomplete="off"
-      style="flex:1;min-width:280px;font-family:var(--font-mono);font-size:.78rem;padding:.45rem .6rem;
-             border:1px solid var(--border);border-radius:var(--radius-sm)">
-    <select name="range" style="padding:.45rem .5rem;border:1px solid var(--border);border-radius:var(--radius-sm);font-size:.78rem">
-      {% for w in windows %}<option value="{{ w }}" {% if w == window %}selected{% endif %}>{{ w }}</option>{% endfor %}
-    </select>
-    <button class="btn btn-primary" type="submit">Search</button>
-  </form>
-
-  <div style="display:flex;gap:.4rem;flex-wrap:wrap;margin-top:.5rem">
-    {% for label, example in examples %}
-    <a href="{{ url_for('ops', q=example, range=window) }}" class="pill"
-       style="background:var(--surface-2);border:1px solid var(--border);color:var(--text-2);text-decoration:none;font-size:.68rem">{{ label }}</a>
+  {# ── Overview ─────────────────────────────────────────────────────────── #}
+  {% if tab == 'overview' %}
+  <div class="c-stats">
+    {% for job in ['feed', 'categorise', 'evaluate', 'health'] %}{% set r = latest[job] %}
+    <div class="c-stat">
+      <small>{{ job }}</small>
+      <b><span class="c-chip {{ r.status if r else 'warn' }}">{{ r.status if r else 'never run' }}</span></b>
+      <span class="c-note">{{ r.run_date if r }}{% if r and r.finished_at %} · {{ r.finished_at.strftime('%H:%M') }} UTC{% endif %}</span>
+    </div>
     {% endfor %}
   </div>
+  <div class="c-stats">
+    <div class="c-stat"><small>events</small><b>{{ counts.events }}</b><span class="c-note">last {{ window }}</span></div>
+    <div class="c-stat"><small>bank api calls</small><b>{{ counts.bank_calls }}</b><span class="c-note">live sandboxes</span></div>
+    <div class="c-stat"><small>http requests</small><b>{{ counts.requests }}</b><span class="c-note">product and ops</span></div>
+    <div class="c-stat"><small>failures</small><b style="color:{{ 'var(--bad)' if counts.errors else 'var(--ink)' }}">{{ counts.errors }}</b>
+      <span class="c-note"><a href="{{ url_for('ops', tab='search', q='status=error', range=window) }}">status=error</a></span></div>
+  </div>
 
-  {% if search_error %}
-  <div style="margin-top:.6rem;background:#fef2f2;border:1px solid #fecaca;color:#991b1b;border-radius:8px;
-              padding:.5rem .7rem;font-size:.75rem">{{ search_error }}</div>
-  {% endif %}
+  <div class="c-grid">
+    <div class="c-panel">
+      <h3>Categoriser accuracy by day · model vs rules</h3>
+      {% if evals %}
+      <table>
+        <thead><tr><th>date</th><th class="num">n</th><th class="num">model</th><th class="num">new</th><th class="num">hard</th><th class="num">rules</th><th></th></tr></thead>
+        <tbody>
+          {% for e in evals %}{% set d = e.details or {} %}
+          <tr>
+            <td>{{ d.booking_date or e.run_date }}</td>
+            <td class="num">{{ d.sample_size or "—" }}</td>
+            <td class="num" style="color:var(--good)">{{ '%.0f%%' % (d.model_accuracy.all * 100) if d.model_accuracy and d.model_accuracy.all is not none else '—' }}</td>
+            <td class="num">{{ '%.0f%%' % (d.model_accuracy.novel * 100) if d.model_accuracy and d.model_accuracy.novel is not none else '—' }}</td>
+            <td class="num">{{ '%.0f%%' % (d.model_accuracy.hard * 100) if d.model_accuracy and d.model_accuracy.hard is not none else '—' }}</td>
+            <td class="num" style="color:var(--dim)">{{ '%.0f%%' % (d.rules_accuracy.all * 100) if d.rules_accuracy and d.rules_accuracy.all is not none else '—' }}</td>
+            <td>{% if d.dataset_run_url %}<a href="{{ d.dataset_run_url }}" target="_blank" rel="noopener">run ↗</a>{% endif %}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+      <div class="c-note" style="margin-top:.5rem">Scores and traces live in Langfuse; this table is the job's own record.</div>
+      {% else %}<div class="c-note">No evaluation has run yet.</div>{% endif %}
+    </div>
 
-  {% if result.rows %}
-  <div style="overflow-x:auto;margin-top:.7rem">
+    <div class="c-panel">
+      <h3>Recent sign-ins</h3>
+      {% if sign_ins %}
+      <table>
+        <thead><tr><th>time (utc)</th><th>event</th><th>account</th><th>switched from</th></tr></thead>
+        <tbody>
+          {% for s in sign_ins %}
+          <tr><td>{{ s.time }}</td><td>{{ s.event }}</td><td>{{ s.email or "—" }}</td>
+              <td style="color:var(--dim)">{{ s.switched_from or "—" }}</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+      {% else %}<div class="c-note">No sign-ins in this range.</div>{% endif %}
+    </div>
+  </div>
+
+  {# ── Search ───────────────────────────────────────────────────────────── #}
+  {% elif tab == 'search' %}
+  <form method="get" class="c-search">
+    <input type="hidden" name="tab" value="search">
+    <input name="q" value="{{ query }}" autocomplete="off" spellcheck="false"
+           placeholder="event=bank.api.call | stats count by bank, host">
+    <select name="range">{% for w in windows %}<option value="{{ w }}" {% if w == window %}selected{% endif %}>{{ w }}</option>{% endfor %}</select>
+    <button type="submit">Search</button>
+  </form>
+  <div class="c-saved">
+    {% for label, example in examples %}
+    <a href="{{ url_for('ops', tab='search', q=example, range=window) }}">{{ label }}</a>
+    {% endfor %}
+  </div>
+  {% if search_error %}<div class="c-err">{{ search_error }}</div>{% endif %}
+
+  <div class="c-hist" title="events over the selected range">
+    {% for b in histogram %}<div style="height:{{ b.height }}%" title="{{ b.count }} events"></div>{% endfor %}
+  </div>
+  <div class="c-note" style="margin-bottom:.6rem">
+    {{ result.rows | length }} {{ 'rows' if result.stats else 'events' }} · range {{ window }} · store {{ event_store or 'off' }}
+  </div>
+
+  <div class="c-layout">
+    <div class="c-panel" style="align-self:start">
+      <h3>Fields</h3>
+      {% for f in facets %}
+      <div class="c-facet">
+        <b>{{ f.field }}</b> <span>{{ f.distinct }}</span>
+        {% for v in f.top %}
+        <a href="{{ url_for('ops', tab='search', q=(query ~ ' ' if query and '|' not in query else '') ~ f.field ~ '=' ~ v.value, range=window) }}">
+          <span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:120px">{{ v.value }}</span>
+          <span>{{ v.count }}</span>
+        </a>
+        {% endfor %}
+      </div>
+      {% else %}<div class="c-note">No events in range.</div>{% endfor %}
+    </div>
+
+    <div class="c-panel">
+      <h3>Results</h3>
+      {% if result.rows %}
+      <div style="overflow-x:auto">
+        <table>
+          <thead><tr>
+            {% if result.columns %}{% for c in result.columns %}<th {% if not loop.first %}class="num"{% endif %}>{{ c }}</th>{% endfor %}
+            {% else %}<th>time (utc)</th><th>sourcetype</th><th>event</th><th class="num">ms</th><th>raw</th>{% endif %}
+          </tr></thead>
+          <tbody>
+            {% for row in result.rows[:200] %}
+            <tr>
+              {% if result.columns %}
+                {% for c in result.columns %}<td {% if not loop.first %}class="num"{% endif %}>{{ row[c] if row[c] is not none else "—" }}</td>{% endfor %}
+              {% else %}
+                <td style="white-space:nowrap">{{ row.time }}</td>
+                <td style="color:var(--dim)">{{ row.sourcetype }}</td>
+                <td>{{ row.event or row.name or "—" }}
+                  {% if row.status %}<span class="c-chip {{ row.status }}">{{ row.status }}</span>{% endif %}
+                  {% if row.bank %}<span style="color:var(--dim)"> {{ row.bank }}</span>{% endif %}
+                  {% if row.path and row.event == 'bank.api.call' %}<span style="color:var(--dim)"> {{ row.method }} {{ row.host }}{{ row.path }} {{ row.status_code }}</span>{% endif %}
+                  {% if row.path and row.event == 'http.request' %}<span style="color:var(--dim)"> {{ row.method }} {{ row.path }} {{ row.status_code }}</span>{% endif %}
+                </td>
+                <td class="num">{{ row.latency_ms or row.duration_ms or "—" }}</td>
+                <td><details><summary style="cursor:pointer;color:var(--dim)">show</summary>
+                  <div class="c-raw">{{ row._raw | tojson(indent=2) }}</div></details></td>
+              {% endif %}
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+      {% if result.rows | length > 200 %}<div class="c-note" style="margin-top:.5rem">First 200 of {{ result.rows | length }}. Narrow the search or add <b>| head</b>.</div>{% endif %}
+      {% else %}
+      <div class="c-note">Nothing matched. Widen the range or simplify the search.</div>
+      {% endif %}
+
+      <details style="margin-top:.7rem">
+        <summary style="cursor:pointer;color:var(--dim)">syntax</summary>
+        <div class="c-note" style="margin-top:.4rem;line-height:1.7">
+          <b>field=value</b>, <b>field!=value</b>, <b>field&gt;100</b>, wildcards (<b>event=bank.*</b>), bare words match anywhere, terms are ANDed.<br>
+          <b>| stats count [as name] [by field, field]</b> (also avg, sum, min, max) · <b>| table f1, f2</b> · <b>| sort -field</b> · <b>| head 20</b><br>
+          Fields: time, sourcetype, host, and every key inside the event, flattened with dots.
+        </div>
+      </details>
+    </div>
+  </div>
+
+  {# ── Jobs ─────────────────────────────────────────────────────────────── #}
+  {% elif tab == 'jobs' %}
+  <div class="c-panel">
+    <h3>Job runs · Vercel Cron, one per day, idempotent per date</h3>
     <table>
-      <thead><tr>
-        {% if result.columns %}{% for c in result.columns %}<th {% if not loop.first %}class="num"{% endif %}>{{ c }}</th>{% endfor %}
-        {% else %}<th>Time (UTC)</th><th>Sourcetype</th><th>Event</th><th class="num">ms</th><th>Detail</th>{% endif %}
-      </tr></thead>
+      <thead><tr><th>date</th><th>job</th><th>status</th><th>started</th><th>finished</th><th>details</th></tr></thead>
       <tbody>
-        {% for row in result.rows[:200] %}
+        {% for r in runs %}
         <tr>
-          {% if result.columns %}
-            {% for c in result.columns %}<td {% if not loop.first %}class="num"{% endif %}>{{ row[c] if row[c] is not none else "—" }}</td>{% endfor %}
-          {% else %}
-            <td class="mono" style="font-size:.72rem;white-space:nowrap">{{ row.time }}</td>
-            <td class="mono" style="font-size:.72rem">{{ row.sourcetype }}</td>
-            <td style="font-size:.75rem">{{ row.event or row.name or row.job or "—" }}</td>
-            <td class="num mono" style="font-size:.72rem">{{ row.duration_ms if row.duration_ms is not none else (row.latency_ms if row.latency_ms is not none else "—") }}</td>
-            <td><details><summary style="cursor:pointer;font-size:.72rem;color:var(--text-3)">show</summary>
-              <div class="ops-json">{{ row._raw | tojson(indent=2) }}</div></details></td>
-          {% endif %}
+          <td>{{ r.run_date }}</td><td>{{ r.job }}</td>
+          <td><span class="c-chip {{ r.status }}">{{ r.status }}</span></td>
+          <td style="color:var(--dim)">{{ r.started_at.strftime('%H:%M:%S') if r.started_at }}</td>
+          <td style="color:var(--dim)">{{ r.finished_at.strftime('%H:%M:%S') if r.finished_at }}</td>
+          <td><details><summary style="cursor:pointer;color:var(--dim)">show</summary>
+            <div class="c-raw">{{ r.details | tojson(indent=2) }}</div></details></td>
         </tr>
         {% endfor %}
       </tbody>
     </table>
-  </div>
-  {% if result.rows | length > 200 %}
-  <div class="card-meta" style="margin-top:.4rem">Showing the first 200 of {{ result.rows | length }} rows. Narrow the search or add <span class="mono">| head</span>.</div>
-  {% endif %}
-  {% else %}
-  <div class="card-meta" style="margin-top:.6rem">
-    {% if event_count %}Nothing matched. Try a wider time range or a simpler search.{% else %}No events stored in this range yet.{% endif %}
-  </div>
-  {% endif %}
-
-  <details style="margin-top:.7rem">
-    <summary style="cursor:pointer;font-size:.72rem;color:var(--text-3)">Search syntax</summary>
-    <div class="card-meta" style="margin-top:.4rem;line-height:1.7">
-      <span class="mono">field=value</span>, <span class="mono">field!=value</span>, <span class="mono">field&gt;100</span>,
-      wildcards (<span class="mono">event=cron.*</span>), bare words match anywhere, terms are ANDed.<br>
-      Pipes: <span class="mono">| stats count [as name] [by field, field]</span> (also avg, sum, min, max),
-      <span class="mono">| table f1, f2</span>, <span class="mono">| sort -field</span>, <span class="mono">| head 20</span>.<br>
-      Fields: <span class="mono">time</span>, <span class="mono">sourcetype</span>, <span class="mono">host</span>,
-      and every key inside the event, flattened with dots.
+    <div class="c-note" style="margin-top:.6rem">
+      Schedules (UTC): 01:00 feed · 02:00 categorise · 03:00 evaluate · 04:00 health. Rerun one with
+      <b>/cron/&lt;job&gt;?force=1</b> and the cron secret.
     </div>
-  </details>
+  </div>
+
+  {# ── Trust chain ──────────────────────────────────────────────────────── #}
+  {% else %}
+  <div class="c-grid">
+    <div class="c-panel">
+      <h3>Trust chain · eIDAS QWAC, revocation</h3>
+      {% set h = latest['health'] %}
+      {% if h and h.details %}
+      <table>
+        <tbody>
+          <tr><td>CRL</td><td><span class="c-chip {{ h.details.crl.status }}">{{ h.details.crl.status }}</span></td>
+              <td style="color:var(--dim)">{{ h.details.crl.url }}</td><td class="num">{{ h.details.crl.days_left }} d</td></tr>
+          <tr><td>OCSP</td><td><span class="c-chip {{ h.details.ocsp.status }}">{{ h.details.ocsp.certificate_status or h.details.ocsp.status }}</span></td>
+              <td style="color:var(--dim)">{{ h.details.ocsp.url }}</td><td class="num"></td></tr>
+          {% for name, c in (h.details.certificates or {}).items() %}
+          <tr><td>{{ name }}</td><td><span class="c-chip {{ c.status }}">{{ c.status }}</span></td>
+              <td style="color:var(--dim)">expires {{ c.not_after[:10] if c.not_after }}</td><td class="num">{{ c.days_left }} d</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+      <div class="c-note" style="margin-top:.6rem">Checked by the health job at 04:00 UTC. OCSP and CRL run on the project's own responder, because UniCredit's gateway requires plain HTTP revocation endpoints.</div>
+      {% else %}<div class="c-note">The health job has not run yet.</div>{% endif %}
+    </div>
+
+    <div class="c-panel">
+      <h3>Bank connectivity · live sandbox calls</h3>
+      <table>
+        <thead><tr><th>categoriser</th><th>model</th></tr></thead>
+        <tbody><tr><td>{{ provider }}</td><td>{{ model }}</td></tr></tbody>
+      </table>
+      <div class="c-note" style="margin-top:.6rem">
+        Model traces, tokens, cost and evaluation runs: <a href="https://cloud.langfuse.com" target="_blank" rel="noopener">Langfuse ↗</a>.<br><br>
+        Live PSD2 calls in the event log:
+        <a href="{{ url_for('ops', tab='search', q='event=bank.api.call | stats count, avg(latency_ms) as avg_ms by bank, host', range=window) }}">calls per bank</a> ·
+        <a href="{{ url_for('ops', tab='search', q='event=bank.api.call | table time, bank, method, host, path, status_code, latency_ms | sort -time', range=window) }}">recent calls</a>
+      </div>
+    </div>
+  </div>
+  {% endif %}
 </div>
 {% endblock %}
