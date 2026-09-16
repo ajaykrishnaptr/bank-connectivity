@@ -64,6 +64,18 @@
   .c-err { border:1px solid #7f1d1d; background:#2a0d0d; color:#fca5a5; border-radius:5px; padding:.45rem .6rem;
            margin-top:.5rem; font-size:.72rem; }
   .c-note { color:var(--dim); font-size:.68rem; }
+  .console details > summary { list-style:none; }
+  .console details > summary::-webkit-details-marker { display:none; }
+  .console details > summary { display:inline-block; background:var(--panel-2); border:1px solid var(--line);
+      color:var(--dim); border-radius:4px; padding:.1rem .45rem; font-size:.66rem; }
+  .console details > summary:hover { color:var(--accent); border-color:#27405f; }
+  /* the shell's top bar, dark to match the console */
+  body:has(.console) .topnav { background:#0b1220; border-bottom:1px solid #1f2b41; }
+  body:has(.console) .nav-logo-name, body:has(.console) .nav-links a, body:has(.console) .nav-pill span { color:#dbe5f3; }
+  body:has(.console) .nav-logo-sub, body:has(.console) .nav-links a { color:#7f90a8; }
+  body:has(.console) .nav-links a.active, body:has(.console) .nav-links span.active { color:#5eead4; }
+  body:has(.console) .nav-pill { background:#111a2b; border-color:#1f2b41; }
+  body:has(.console) .nav-btn-danger { background:#2a0d0d; border-color:#7f1d1d; color:#fca5a5; }
 </style>
 
 <div class="console">
