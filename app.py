@@ -904,6 +904,8 @@ def login():
     Signing in while another account is open switches to the new one: the old
     session is dropped first, so nothing of one login reaches the next.
     """
+    if current_user.is_authenticated and request.method == "GET" and _on_ops_host():
+        return redirect(url_for("ops"))
     if current_user.is_authenticated and request.method == "GET":
         # Show the form instead of bouncing home, so a viewer can switch persona.
         return render_template("login.html", demo_users=[] if _on_ops_host() else DEMO_LOGIN,
@@ -922,7 +924,9 @@ def login():
             log.info("auth.login.success", extra={"event": "auth.login.success",
                                                   "user_id": user.id, "email": email,
                                                   "switched_from": previous})
-            return redirect(request.args.get("next") or url_for("index"))
+            # On the operations host the product pages are elsewhere: land on the view itself.
+            default = url_for("ops") if _on_ops_host() else url_for("index")
+            return redirect(request.args.get("next") or default)
         # Don't tell the attacker which half was wrong.
         log.warning("auth.login.failed", extra={"event": "auth.login.failed", "email": email})
         flash("Invalid email or password.", "error")
