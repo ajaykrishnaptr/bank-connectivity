@@ -28,6 +28,5 @@ deploy_crl.sh
 /FintNet_*
 /STRATEGY_AND_METRICS.md
 /base.html
-evals/results/
 .agents/
 skills-lock.json

@@ -12,5 +12,4 @@ __pycache__/
 # Marketplace agent skills installed by the Vercel CLI; local tooling only.
 .agents/
 skills-lock.json
-evals/results/
 .venv/
