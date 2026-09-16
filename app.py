@@ -561,6 +561,8 @@ def _split_product_and_ops():
     product pages on the operations host."""
     endpoint = (request.endpoint or "").split(".")[0]
     if _on_ops_host():
+        if endpoint == "index":            # the operations host opens on the operations view
+            return redirect(url_for("ops"))
         if endpoint and endpoint not in _OPS_ENDPOINTS and not endpoint.startswith("cron"):
             return redirect(PRODUCT_URL)
     elif OPS_HOST and endpoint == "ops":
