@@ -31,7 +31,10 @@
                 font-size:.62rem; padding:.3rem .5rem; border-bottom:1px solid var(--line); white-space:nowrap; }
   .console td { padding:.3rem .5rem; border-bottom:1px solid #16203312; color:var(--ink); vertical-align:top; }
   .console tbody tr:nth-child(even) { background:#0d1524; }
-  .console tbody tr:hover { background:#152134; }
+  /* the shell paints hovered cells light, which hides light text: keep them dark */
+  .console tbody tr:hover td { background:#1b2a42; color:#f1f6ff; }
+  .console tbody tr:hover td a { color:var(--accent); }
+  .console ::selection { background:#27405f; color:#f1f6ff; }
   .num { text-align:right; }
   .c-chip { display:inline-block; padding:.05rem .4rem; border-radius:4px; font-size:.65rem; border:1px solid; }
   .ok    { color:var(--good); border-color:#14532d; background:#052e1d; }
