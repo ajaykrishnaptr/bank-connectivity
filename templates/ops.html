@@ -599,10 +599,11 @@
   {% else %}
   <div class="c-panel">
     <h3>Last assistant run</h3>
-    <div class="c-note">No local run to show. <b>evals/results/</b> is not deployed, so on a hosted instance the
-      figures live in <a href="https://cloud.langfuse.com" target="_blank" rel="noopener">Langfuse ↗</a> under the
-      dataset <b>fintnet-assistant-questions</b>. Run
-      <b>.venv/bin/python evals/assistant_experiment.py run</b> locally to populate this panel.</div>
+    <div class="c-note">No run saved yet. Run <b>.venv/bin/python evals/assistant_experiment.py run</b> to fill this
+      panel. Each run is written to <b>evals/results/</b> and committed, so the newest one shows here and on the
+      operations host. Traces and scores also live in
+      <a href="https://cloud.langfuse.com" target="_blank" rel="noopener">Langfuse ↗</a> under the dataset
+      <b>fintnet-assistant-questions</b>.</div>
   </div>
   {% endif %}
 

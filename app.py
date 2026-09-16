@@ -1682,10 +1682,11 @@ def _latest_assistant_eval() -> dict | None:
     """The newest assistant experiment saved by evals/assistant_experiment.py.
 
     Read only by the "How things work" tab, to show the last run beside the
-    explanation. evals/results/ is gitignored, so a deployment has nothing to
-    read and the tab falls back to the structure and a link to Langfuse.
-    Cases are ordered by the judge's overall score, weakest first, because the
-    disagreements between the graders are the point of the table.
+    explanation. Runs are committed and named in vercel.json includeFiles, so
+    the newest one reaches the deployment too; this returns None only before
+    the first run. Cases are ordered by the judge's overall score, weakest
+    first, because the disagreements between the graders are the point of the
+    table.
     """
     try:
         files = sorted((Path(__file__).parent / "evals" / "results").glob("assistant_*.json"))
