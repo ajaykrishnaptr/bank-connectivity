@@ -716,7 +716,7 @@ def _fetch_and_store(bank: str, conn: BankConnection) -> None:
                                          synthbank_client.get_transactions(conn.consent_id, acc.resource_id),
                                          user_id=conn.user_id)
         log.info("sync.complete", extra={
-            "event": "sync.complete", "user_id": conn.user_id, "bank": bank,
+            "event": "sync.complete", "user_id": conn.user_id, "bank": gen_bank, "data": "generated",
             "account_count": len(saved), "latency_ms": int((_time.time() - t0) * 1000),
         })
         return saved
@@ -773,7 +773,7 @@ def _fetch_and_store(bank: str, conn: BankConnection) -> None:
             log.warning("sync.categorise.failed", extra={"event": "sync.categorise.failed", "error": str(exc)[:200]})
 
     log.info("sync.complete", extra={
-        "event": "sync.complete", "user_id": conn.user_id, "bank": bank,
+        "event": "sync.complete", "user_id": conn.user_id, "bank": bank, "data": "live sandbox",
         "account_count": len(saved), "latency_ms": int((_time.time() - t0) * 1000),
     })
 
@@ -1588,7 +1588,7 @@ def ask():
 
 _EVENT_WINDOWS = {"15m": 900, "1h": 3600, "24h": 86400, "7d": 604800}
 _SPL_EXAMPLES = [
-    ("Bank syncs", "event=sync.complete | table time, bank, account_count, latency_ms | sort -time"),
+    ("Bank syncs", "event=sync.complete | table time, bank, data, account_count, latency_ms | sort -time"),
     ("Logins", "event=auth.* | table time, event, email"),
     ("Bank connections", "event=connection.* | table time, event, bank, user_id"),
     ("Assistant tool calls", "sourcetype=fintnet:tool | stats count by name"),
