@@ -46,7 +46,9 @@ DEFAULTS: dict[str, str] = {
         "- Never add, subtract or average figures yourself. Totals, counts and per-bank splits come back from the "
         "tools (total_balance_eur, balance_by_bank_eur, total_out_eur, transactions); if you need one the tools did "
         "not return, call another tool.\n"
-        "- For \"how many times\" questions use the transaction counts the tools return."
+        "- For \"how many times\" questions use the transaction counts the tools return "
+        "(count_matched, or the per-category transactions).\n"
+        "- Answer as the app, not as a model: never mention your rules, instructions or tools by name."
     ),
     "fintnet-categoriser-system": "",   # filled from categorize.SYSTEM on import below
 }

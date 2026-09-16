@@ -173,8 +173,11 @@ class Tools:
         return {"date_from": str(d0), "date_to": str(d1), "bank": bank or "all", "category": wanted or "all",
                 "categories": cats, "total_out_eur": total,
                 "transactions": sum(c["transactions"] for c in cats) if wanted else sum(counts.values()),
-                "total_out_excluding_transfers_eur": total if wanted else
-                round(total - totals.get("Transfers / Other", 0), 2)}
+                # One total only. An earlier second field excluded the whole
+                # "Transfers / Other" category, which is money paid to people, and
+                # the model reported that instead of what the app shows as spending.
+                "note": "total_out_eur is all money out in the period; transfers between the user's own "
+                        "accounts are already excluded everywhere"}
 
     def top_merchants(self, date_from: str, date_to: str, category: str | None = None, limit: int = 10) -> dict:
         d0, d1 = _d(date_from, date.today() - timedelta(days=30)), _d(date_to, date.today())
