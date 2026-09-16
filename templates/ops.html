@@ -383,7 +383,7 @@
           <rect x="566" y="140" width="372" height="116" rx="5" class="hw-hatchfill"></rect>
           <rect x="566" y="140" width="372" height="116" rx="5" class="hw-box-open hw-judge"></rect>
           <text x="582" y="162" class="t-lane t-judge">JUDGE</text>
-          <text x="922" y="162" text-anchor="end" class="t-dim">unvalidated</text>
+          <text x="922" y="162" text-anchor="end" class="t-dim">agreement unmeasured</text>
           <text x="582" y="182" class="t-dim">groq {{ judge_model }}, temperature 0</text>
           <text x="582" y="204" class="t-box">answers_question · faithful</text>
           <text x="582" y="222" class="t-box">concise · stays_in_scope</text>
@@ -438,7 +438,8 @@
       <h3><span class="c-chip running">human</span> settles it</h3>
       <dl class="hw-def">
         <dt>Sees</dt><dd>The same answers, in a Langfuse annotation queue.</dd>
-        <dt>Decides</dt><dd>Whether the judge was right. Its scores stay unvalidated until this runs.</dd>
+        <dt>Decides</dt><dd>Whether the judge was right. Until this runs, the judge's agreement with a person is
+          unmeasured.</dd>
         <dt>Method</dt><dd><b>evals/review.py</b> creates the score configs and the queue, fills it with the newest
           answers, and reports how often the judge and a person agree.</dd>
         <dt>Status</dt><dd>Built, not yet run. No agreement figure exists.</dd>
