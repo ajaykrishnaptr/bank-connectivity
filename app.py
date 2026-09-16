@@ -28,6 +28,7 @@ Keep route handlers small. Anything more than ~30 lines of logic
 belongs in a helper above so the routes stay readable.
 """
 import os
+import time
 import uuid
 from collections import defaultdict
 from datetime import date, timedelta
@@ -44,6 +45,7 @@ from werkzeug.security import check_password_hash, generate_password_hash
 # certificate paths (runtime_certs is a no-op without the *_B64 variables).
 load_dotenv()
 import runtime_certs  # noqa: E402,F401
+import spl  # noqa: E402
 
 import assistant  # noqa: E402
 import auth  # noqa: E402
@@ -540,6 +542,30 @@ def load_user(user_id):
 # templates use it only to label the synthetic bank data honestly.
 IS_HOSTED = bool(os.getenv("VERCEL"))
 
+# The product and the internal view are the same app on two hostnames.
+# OPS_HOST serves only the operations view; every other host serves only the
+# product. Unset (local development) means one host serves both.
+OPS_HOST = (os.getenv("OPS_HOST") or "").lower()
+PRODUCT_URL = os.getenv("PRODUCT_URL", "https://fintnet.ai")
+# Endpoints the operations host serves; everything else there goes to the product.
+_OPS_ENDPOINTS = {"ops", "login", "logout", "signup", "static"}
+
+
+def _on_ops_host() -> bool:
+    return bool(OPS_HOST) and request.host.split(":")[0].lower() == OPS_HOST
+
+
+@app.before_request
+def _split_product_and_ops():
+    """Keep the two views apart: no operations page on the product host, and no
+    product pages on the operations host."""
+    endpoint = (request.endpoint or "").split(".")[0]
+    if _on_ops_host():
+        if endpoint and endpoint not in _OPS_ENDPOINTS and not endpoint.startswith("cron"):
+            return redirect(PRODUCT_URL)
+    elif OPS_HOST and endpoint == "ops":
+        abort(404)
+
 
 app.jinja_env.filters["money"] = _money
 app.jinja_env.filters["bank_name"] = _bank_name
@@ -548,7 +574,8 @@ app.jinja_env.tests["generated"] = lambda account: bool(account and (account.res
 
 @app.context_processor
 def inject_flags():
-    return {"is_hosted": IS_HOSTED, "assistant_enabled": llm.available()}
+    return {"is_hosted": IS_HOSTED, "assistant_enabled": llm.available(),
+            "ops_view": _on_ops_host(), "product_url": PRODUCT_URL}
 
 
 app.register_blueprint(cron.bp)
@@ -887,7 +914,7 @@ def login():
         log.warning("auth.login.failed", extra={"event": "auth.login.failed", "email": email})
         flash("Invalid email or password.", "error")
     return render_template("login.html",
-                           demo_users=DEMO_LOGIN, demo_password=DEMO_PASSWORD)
+                           demo_users=[] if _on_ops_host() else DEMO_LOGIN, demo_password=DEMO_PASSWORD)
 
 
 @app.route("/signup", methods=["GET", "POST"])
@@ -1541,18 +1568,47 @@ def ask():
 
 # ── Operations ───────────────────────────────────────────────────────────────
 
+_EVENT_WINDOWS = {"15m": 900, "1h": 3600, "24h": 86400, "7d": 604800}
+_SPL_EXAMPLES = [
+    ("Bank syncs", "event=sync.complete | table time, bank, account_count, latency_ms | sort -time"),
+    ("Logins", "event=auth.* | table time, event, email"),
+    ("Bank connections", "event=connection.* | table time, event, bank, user_id"),
+    ("Assistant tool calls", "sourcetype=fintnet:tool | stats count by name"),
+    ("Slowest requests", "sourcetype=fintnet:request | table time, name, duration_ms | sort -duration_ms | head 10"),
+    ("Job runs", "sourcetype=fintnet:cron | stats count by name, status"),
+    ("Anything that failed", "status=error"),
+]
+
+
 @app.route("/ops")
 @login_required
 def ops():
-    """Cron runs, the latest categoriser evaluation, trust-chain health, model usage and recent events."""
+    """Cron runs, the latest categoriser evaluation, trust-chain health, model usage and recent events.
+
+    Internal view: only an admin account can open it, and on the operations host
+    (OPS_HOST) it is the only page served."""
+    if current_user.role != "tpp_admin":
+        abort(404)
     runs = JobRun.query.order_by(JobRun.run_date.desc(), JobRun.job).limit(40).all()
     latest = {job: JobRun.query.filter_by(job=job).order_by(JobRun.run_date.desc()).first()
               for job in ("feed", "categorise", "evaluate", "health")}
     evals = (JobRun.query.filter_by(job="evaluate").filter(JobRun.status.in_(["ok", "warn"]))
              .order_by(JobRun.run_date.desc()).limit(14).all())
-    events = eventlog.read(40)
-    return render_template("ops.html", runs=runs, latest=latest, evals=evals, events=events,
-                           usage=llm.usage(), provider=cat.provider())
+    # Event search, Splunk style: spl.py runs the query over the stored HEC records.
+    query = request.args.get("q", "")
+    window = request.args.get("range", "24h")
+    since = time.time() - _EVENT_WINDOWS.get(window, 86400) if window != "all" else 0
+    records = [r for r in eventlog.read(int(os.getenv("EVENT_SEARCH_LIMIT", "2000")))
+               if float(r.get("time") or 0) >= since]
+    try:
+        found, error = spl.run(query, records), None
+    except spl.SplError as exc:
+        found, error = spl.run("", records[:50]), str(exc)
+    return render_template("ops.html", runs=runs, latest=latest, evals=evals,
+                           usage=llm.usage(), provider=cat.provider(),
+                           query=query, window=window, windows=list(_EVENT_WINDOWS) + ["all"],
+                           result=found, search_error=error, event_count=len(records),
+                           event_store=eventlog.backend(), examples=_SPL_EXAMPLES)
 
 
 # ── Account detail views (live API, DB-backed credentials) ───────────────────

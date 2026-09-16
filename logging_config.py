@@ -1,7 +1,9 @@
 """
 JSON file logging for FintNet, Splunk-ready.
 
-Writes one JSON event per line to logs/fintnet.json (rotated at 10 MB, keep 5).
+Writes one JSON event per line to logs/fintnet.json (rotated at 10 MB, keep 5),
+and copies events carrying an `event` field into eventlog.py, which the
+operations page searches.
 Use `log.info("connect.start", extra={"bank": "ing", "user_id": 7})` — every
 field becomes a Splunk-searchable property without regex parsing.
 """
@@ -19,6 +21,31 @@ LOG_DIR  = os.getenv("LOG_DIR") or ("/tmp/logs" if os.getenv("VERCEL") else "log
 LOG_FILE = os.path.join(LOG_DIR, "fintnet.json")
 
 
+_STANDARD = set(vars(logging.makeLogRecord({})))
+
+
+class EventLogHandler(logging.Handler):
+    """Copies application events into the searchable event log.
+
+    Any `log.info("sync.complete", extra={"event": "sync.complete", ...})` also
+    becomes an event the operations page can search. Writing must never break
+    the call site, so every failure is swallowed.
+    """
+
+    def emit(self, record: logging.LogRecord) -> None:
+        if not getattr(record, "event", None):
+            return
+        try:
+            import eventlog
+
+            fields = {k: v for k, v in vars(record).items()
+                      if k not in _STANDARD and k not in ("message", "asctime", "taskName")}
+            fields.setdefault("level", record.levelname)
+            eventlog.emit("fintnet:app", fields, when=record.created)
+        except Exception:  # noqa: BLE001 — logging must never raise
+            pass
+
+
 def setup_logging(level: int = logging.INFO) -> logging.Logger:
     formatter = JsonFormatter(
         "{asctime} {levelname} {name} {message}",
@@ -30,7 +57,7 @@ def setup_logging(level: int = logging.INFO) -> logging.Logger:
     console_handler.setFormatter(formatter)
     console_handler.setLevel(level)
 
-    handlers: list[logging.Handler] = [console_handler]
+    handlers: list[logging.Handler] = [console_handler, EventLogHandler(level=level)]
 
     # Best-effort file logging — on a read-only FS (e.g. Vercel without a
     # writable LOG_DIR) we just keep the console handler so import never

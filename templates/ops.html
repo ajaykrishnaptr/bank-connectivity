@@ -12,8 +12,9 @@
 <div style="margin-bottom:1.25rem">
   <h2>Operations</h2>
   <p class="text-muted" style="font-size:.85rem;margin-top:.25rem">
-    Daily jobs on Vercel Cron, the categoriser evaluation (also stored as Langfuse datasets and experiment runs),
-    trust-chain health for the live sandboxes, and model usage.
+    Internal view, separate from the product. Daily jobs on Vercel Cron, the categoriser evaluation,
+    trust-chain health for the live sandboxes, and the event log. Model traces, tokens, cost and evaluation
+    detail live in <a href="https://cloud.langfuse.com" target="_blank" rel="noopener">Langfuse</a>.
   </p>
 </div>
 
@@ -63,8 +64,7 @@
     <table style="margin-top:.5rem">
       <tr><td>Categoriser provider</td><td class="mono">{{ provider }}</td></tr>
       <tr><td>Model</td><td class="mono">{{ usage.model }}</td></tr>
-      <tr><td>Calls this instance</td><td class="mono">{{ usage.calls }} (errors {{ usage.errors }})</td></tr>
-      <tr><td>Tokens this instance</td><td class="mono">{{ usage.input_tokens }} in · {{ usage.output_tokens }} out</td></tr>
+      <tr><td>Traces and evaluations</td><td><a href="https://cloud.langfuse.com" target="_blank" rel="noopener">Langfuse ↗</a></td></tr>
       <tr><td>Model available</td><td class="mono">{{ usage.available }}</td></tr>
     </table>
     {% set h = latest['health'] %}
@@ -102,8 +102,79 @@
 </div>
 
 <div class="card">
-  <div class="card-label">Recent events (Splunk HEC format)</div>
-  <div class="ops-json" style="margin-top:.5rem">{% for e in events %}{{ e.time }} {{ e.sourcetype }} {{ e.event.name }} {{ e.event.status }}{% if e.event.duration_ms is not none %} {{ e.event.duration_ms }}ms{% endif %}{% if e.event.model %} {{ e.event.model }}{% endif %}
-{% endfor %}</div>
+  <div style="display:flex;align-items:baseline;justify-content:space-between;gap:1rem;flex-wrap:wrap">
+    <div class="card-label">Event log search</div>
+    <div class="text-muted" style="font-size:.7rem">
+      {{ event_count }} events in range · store: {{ event_store or 'off' }} · Splunk HEC format, searched with an SPL subset
+    </div>
+  </div>
+
+  <form method="get" style="display:flex;gap:.5rem;margin-top:.6rem;flex-wrap:wrap">
+    <input name="q" value="{{ query }}" placeholder="event=assistant.* | stats count by event" autocomplete="off"
+      style="flex:1;min-width:280px;font-family:var(--font-mono);font-size:.78rem;padding:.45rem .6rem;
+             border:1px solid var(--border);border-radius:var(--radius-sm)">
+    <select name="range" style="padding:.45rem .5rem;border:1px solid var(--border);border-radius:var(--radius-sm);font-size:.78rem">
+      {% for w in windows %}<option value="{{ w }}" {% if w == window %}selected{% endif %}>{{ w }}</option>{% endfor %}
+    </select>
+    <button class="btn btn-primary" type="submit">Search</button>
+  </form>
+
+  <div style="display:flex;gap:.4rem;flex-wrap:wrap;margin-top:.5rem">
+    {% for label, example in examples %}
+    <a href="{{ url_for('ops', q=example, range=window) }}" class="pill"
+       style="background:var(--surface-2);border:1px solid var(--border);color:var(--text-2);text-decoration:none;font-size:.68rem">{{ label }}</a>
+    {% endfor %}
+  </div>
+
+  {% if search_error %}
+  <div style="margin-top:.6rem;background:#fef2f2;border:1px solid #fecaca;color:#991b1b;border-radius:8px;
+              padding:.5rem .7rem;font-size:.75rem">{{ search_error }}</div>
+  {% endif %}
+
+  {% if result.rows %}
+  <div style="overflow-x:auto;margin-top:.7rem">
+    <table>
+      <thead><tr>
+        {% if result.columns %}{% for c in result.columns %}<th {% if not loop.first %}class="num"{% endif %}>{{ c }}</th>{% endfor %}
+        {% else %}<th>Time (UTC)</th><th>Sourcetype</th><th>Event</th><th class="num">ms</th><th>Detail</th>{% endif %}
+      </tr></thead>
+      <tbody>
+        {% for row in result.rows[:200] %}
+        <tr>
+          {% if result.columns %}
+            {% for c in result.columns %}<td {% if not loop.first %}class="num"{% endif %}>{{ row[c] if row[c] is not none else "—" }}</td>{% endfor %}
+          {% else %}
+            <td class="mono" style="font-size:.72rem;white-space:nowrap">{{ row.time }}</td>
+            <td class="mono" style="font-size:.72rem">{{ row.sourcetype }}</td>
+            <td style="font-size:.75rem">{{ row.event or row.name or row.job or "—" }}</td>
+            <td class="num mono" style="font-size:.72rem">{{ row.duration_ms if row.duration_ms is not none else (row.latency_ms if row.latency_ms is not none else "—") }}</td>
+            <td><details><summary style="cursor:pointer;font-size:.72rem;color:var(--text-3)">show</summary>
+              <div class="ops-json">{{ row._raw | tojson(indent=2) }}</div></details></td>
+          {% endif %}
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% if result.rows | length > 200 %}
+  <div class="card-meta" style="margin-top:.4rem">Showing the first 200 of {{ result.rows | length }} rows. Narrow the search or add <span class="mono">| head</span>.</div>
+  {% endif %}
+  {% else %}
+  <div class="card-meta" style="margin-top:.6rem">
+    {% if event_count %}Nothing matched. Try a wider time range or a simpler search.{% else %}No events stored in this range yet.{% endif %}
+  </div>
+  {% endif %}
+
+  <details style="margin-top:.7rem">
+    <summary style="cursor:pointer;font-size:.72rem;color:var(--text-3)">Search syntax</summary>
+    <div class="card-meta" style="margin-top:.4rem;line-height:1.7">
+      <span class="mono">field=value</span>, <span class="mono">field!=value</span>, <span class="mono">field&gt;100</span>,
+      wildcards (<span class="mono">event=cron.*</span>), bare words match anywhere, terms are ANDed.<br>
+      Pipes: <span class="mono">| stats count [as name] [by field, field]</span> (also avg, sum, min, max),
+      <span class="mono">| table f1, f2</span>, <span class="mono">| sort -field</span>, <span class="mono">| head 20</span>.<br>
+      Fields: <span class="mono">time</span>, <span class="mono">sourcetype</span>, <span class="mono">host</span>,
+      and every key inside the event, flattened with dots.
+    </div>
+  </details>
 </div>
 {% endblock %}

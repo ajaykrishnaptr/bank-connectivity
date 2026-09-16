@@ -309,14 +309,14 @@
 
 <nav class="topnav">
   <div class="topnav-inner">
-    <a class="nav-logo" href="{{ url_for('index') }}">
+    <a class="nav-logo" href="{{ product_url if ops_view else url_for('index') }}">
       <div class="nav-logo-icon">FN</div>
       <div class="nav-logo-text">
         <div class="nav-logo-name">FintNet</div>
-        <div class="nav-logo-sub">Bank Integrations</div>
+        <div class="nav-logo-sub">{% if ops_view %}Operations{% else %}Bank Integrations{% endif %}</div>
       </div>
     </a>
-    {% if current_user.is_authenticated %}
+    {% if current_user.is_authenticated and not ops_view %}
     <div class="nav-divider"></div>
     <div class="nav-links">
       <a href="{{ url_for('dashboard') }}" {% if request.endpoint == 'dashboard' %}class="active"{% endif %}>Dashboard</a>
@@ -324,8 +324,14 @@
       <a href="{{ url_for('spending') }}" {% if request.endpoint == 'spending' %}class="active"{% endif %}>Spending</a>
       <a href="{{ url_for('recurring') }}" {% if request.endpoint == 'recurring' %}class="active"{% endif %}>Recurring</a>
       <a href="{{ url_for('ask') }}" {% if request.endpoint == 'ask' %}class="active"{% endif %}>Ask</a>
-      <a href="{{ url_for('ops') }}" {% if request.endpoint == 'ops' %}class="active"{% endif %}>Ops</a>
+      {% if current_user.role == 'tpp_admin' %}<a href="{{ url_for('ops') }}" {% if request.endpoint == 'ops' %}class="active"{% endif %}>Ops</a>{% endif %}
       <a href="{{ url_for('index') }}" {% if request.endpoint == 'index' %}class="active"{% endif %}>Connect</a>
+    </div>
+    {% elif ops_view %}
+    <div class="nav-divider"></div>
+    <div class="nav-links">
+      <span class="active">Operations</span>
+      <a href="{{ product_url }}">Product ↗</a>
     </div>
     {% endif %}
     <div class="nav-spacer"></div>

@@ -270,6 +270,21 @@ class SbLabel(db.Model):
     is_recurring   = db.Column(db.Boolean, default=False)
 
 
+class EventLogEntry(db.Model):
+    """One HEC-shaped event. The operations page searches these with spl.py.
+
+    Kept in the database so the hosted app has an event store without an
+    external log service; the oldest rows are trimmed to EVENT_LOG_MAX.
+    """
+    __tablename__ = "event_log"
+
+    id         = db.Column(db.Integer, primary_key=True)
+    ts         = db.Column(db.Float, nullable=False, index=True)   # epoch seconds
+    sourcetype = db.Column(db.String(60), nullable=False, index=True)
+    host       = db.Column(db.String(120))
+    record     = db.Column(db.JSON, nullable=False)                # the whole HEC record
+
+
 class JobRun(db.Model):
     """One row per cron job per day; makes every job idempotent per date."""
     __tablename__ = "job_runs"

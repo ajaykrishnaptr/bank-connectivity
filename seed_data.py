@@ -17,6 +17,7 @@ Usage:
     python seed_data.py --population 50
     python seed_data.py --reset-demo        # rebuild the demo logins' generated accounts and drop
                                             # their FintNet accounts and connections
+    ADMIN_PASSWORD=... python seed_data.py --admin-email you@example.com   # operations admin account
 
 Re-runnable: existing users, customers and history are kept; only what is
 missing is created. Login password for every demo user: TestPass123.
@@ -29,6 +30,25 @@ import time
 from werkzeug.security import generate_password_hash
 
 PASSWORD = "TestPass123"
+
+
+def create_admin(email: str, password: str) -> str:
+    """Create or update the admin account that may open the operations view."""
+    from app import app
+    from models import User, db
+
+    with app.app_context():
+        user = User.query.filter_by(email=email.lower()).first()
+        if user is None:
+            user = User(email=email.lower(), password_hash=generate_password_hash(password), role="tpp_admin")
+            db.session.add(user)
+            action = "created"
+        else:
+            user.password_hash, user.role = generate_password_hash(password), "tpp_admin"
+            action = "updated"
+        db.session.commit()
+    print({"admin": email.lower(), "action": action})
+    return action
 
 
 def main(population: int = 200, reset_demo: bool = False) -> dict:
@@ -58,5 +78,10 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--population", type=int, default=200)
     parser.add_argument("--reset-demo", action="store_true")
+    parser.add_argument("--admin-email", help="create or update the operations admin; password from ADMIN_PASSWORD")
     args = parser.parse_args()
-    main(population=args.population, reset_demo=args.reset_demo)
+    if args.admin_email:
+        import os
+        create_admin(args.admin_email, os.environ["ADMIN_PASSWORD"])
+    else:
+        main(population=args.population, reset_demo=args.reset_demo)

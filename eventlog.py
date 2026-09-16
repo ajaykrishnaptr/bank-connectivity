@@ -8,11 +8,12 @@ as one JSON line:
 That is the body a Splunk HEC endpoint accepts, so the same lines can be sent
 to a real Splunk instance unchanged (set SPLUNK_HEC_URL and SPLUNK_HEC_TOKEN).
 
-Stores, off when EVENT_LOG=off:
+Stores (EVENT_LOG_BACKEND picks one, EVENT_LOG=off disables):
   * Local: a file (EVENT_LOG_PATH, default logs/events.jsonl), written in full.
-  * Vercel: Upstash Redis (KV_REST_API_URL, KV_REST_API_TOKEN). The newest
-    EVENT_LOG_MAX events (default 2000) are kept, and bearer and access tokens
-    are masked to their last 6 characters.
+  * Hosted: the app's database (`event_log` table), or Upstash Redis when
+    KV_REST_API_URL and KV_REST_API_TOKEN are set. The newest EVENT_LOG_MAX
+    events (default 2000) are kept, and bearer and access tokens are masked to
+    their last 6 characters.
 
 The log must never break a request, so every write swallows its own errors.
 """
@@ -36,12 +37,16 @@ _TOKEN_KEYS = {"access_token", "refresh_token", "id_token", "consent_id"}
 
 
 def backend() -> str | None:
+    """Where events are stored: redis (Upstash), db (the app's database), file, or off."""
+    chosen = os.getenv("EVENT_LOG_BACKEND", "").lower()
     if os.getenv("EVENT_LOG", "on").lower() == "off":
         return None
-    hosted = os.getenv("VERCEL") or os.getenv("EVENT_LOG_BACKEND") == "redis"
-    if hosted and os.getenv("KV_REST_API_URL") and os.getenv("KV_REST_API_TOKEN"):
+    if chosen in ("redis", "db", "file"):
+        return chosen
+    if os.getenv("KV_REST_API_URL") and os.getenv("KV_REST_API_TOKEN"):
         return "redis"
-    return None if os.getenv("VERCEL") else "file"
+    # Hosted without Upstash: the database keeps the events; locally, a file.
+    return "db" if os.getenv("VERCEL") else "file"
 
 
 def enabled() -> bool:
@@ -88,10 +93,12 @@ def emit(sourcetype: str, event: dict[str, Any], *, when: float | None = None) -
         return
     record = {"time": round(when if when is not None else time.time(), 3), "host": socket.gethostname(),
               "source": "fintnet", "sourcetype": sourcetype, "index": INDEX,
-              "event": mask_tokens(event) if store == "redis" else event}
+              "event": mask_tokens(event) if store in ("redis", "db") else event}
     line = json.dumps(record, ensure_ascii=False, default=str)
     try:
-        if store == "redis":
+        if store == "db":
+            _db_write(record)
+        elif store == "redis":
             _redis([["LPUSH", _REDIS_KEY, line], ["LTRIM", _REDIS_KEY, 0, _max_events() - 1]])
         else:
             p = path()
@@ -102,6 +109,25 @@ def emit(sourcetype: str, event: dict[str, Any], *, when: float | None = None) -
     except Exception:  # noqa: BLE001 — the log must never break a request
         pass
     _forward(line)
+
+
+def _db_write(record: dict) -> None:
+    """Insert one event on its own connection, so a log write never joins (or breaks)
+    the request's transaction, and trim the table now and then."""
+    import random
+
+    from models import EventLogEntry, db
+
+    with db.engine.begin() as conn:
+        conn.execute(EventLogEntry.__table__.insert().values(
+            ts=record["time"], sourcetype=record["sourcetype"], host=record.get("host"),
+            record=json.loads(json.dumps(record, default=str))))
+        if random.random() < 0.02:  # ~1 write in 50 prunes the oldest rows
+            keep = _max_events()
+            cutoff = conn.execute(db.text(
+                "SELECT ts FROM event_log ORDER BY ts DESC LIMIT 1 OFFSET :keep"), {"keep": keep}).scalar()
+            if cutoff is not None:
+                conn.execute(db.text("DELETE FROM event_log WHERE ts <= :cutoff"), {"cutoff": cutoff})
 
 
 def _forward(line: str) -> None:
@@ -120,8 +146,17 @@ def _forward(line: str) -> None:
 
 def read(limit: int = 500) -> list[dict]:
     """The newest events, newest first. Unreadable lines are skipped."""
+    store = backend()
+    if store == "db":
+        from models import EventLogEntry, db
+        try:
+            rows = db.session.query(EventLogEntry.record).order_by(EventLogEntry.ts.desc()).limit(limit).all()
+        except Exception:  # noqa: BLE001
+            db.session.rollback()
+            return []
+        return [r[0] for r in rows if isinstance(r[0], dict)]
     try:
-        if backend() == "redis":
+        if store == "redis":
             lines = _redis([["LRANGE", _REDIS_KEY, 0, min(limit, _max_events()) - 1]])[0].get("result") or []
         else:
             p = path()
