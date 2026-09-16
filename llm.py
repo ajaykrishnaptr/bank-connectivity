@@ -57,7 +57,7 @@ def client() -> anthropic.Anthropic:
 
 def create(name: str, *, system: str, messages: list[dict], max_tokens: int,
            tools: list[dict] | None = None, output_config: dict | None = None,
-           metadata: dict[str, Any] | None = None) -> anthropic.types.Message:
+           metadata: dict[str, Any] | None = None, prompt: Any = None) -> anthropic.types.Message:
     """One Messages API call, traced and budgeted."""
     if not available():
         raise LLMUnavailable("model unavailable (no key or call budget used)")
@@ -67,8 +67,9 @@ def create(name: str, *, system: str, messages: list[dict], max_tokens: int,
     if output_config:
         params["output_config"] = output_config
     with observability.generation(name, model=MODEL, system=system, messages=messages,
-                                  model_parameters={"max_tokens": max_tokens},
-                                  metadata={"prompt_version": observability.version(system), **(metadata or {})}) as gen:
+                                  model_parameters={"max_tokens": max_tokens}, prompt=prompt,
+                                  metadata={"prompt_version": getattr(prompt, "version", None)
+                                            or observability.version(system), **(metadata or {})}) as gen:
         try:
             response = client().messages.create(**params)
         except anthropic.RateLimitError as exc:
@@ -91,10 +92,11 @@ def create(name: str, *, system: str, messages: list[dict], max_tokens: int,
 
 
 def json_call(name: str, *, system: str, user: str, schema: dict, max_tokens: int = 400,
-              metadata: dict[str, Any] | None = None) -> dict:
+              metadata: dict[str, Any] | None = None, prompt: Any = None) -> dict:
     """A call whose answer must match `schema`, using structured outputs."""
     response = create(name, system=system, messages=[{"role": "user", "content": user}], max_tokens=max_tokens,
-                      output_config={"format": {"type": "json_schema", "schema": schema}}, metadata=metadata)
+                      output_config={"format": {"type": "json_schema", "schema": schema}},
+                      metadata=metadata, prompt=prompt)
     text = next((b.text for b in response.content if b.type == "text"), "")
     try:
         return json.loads(text)

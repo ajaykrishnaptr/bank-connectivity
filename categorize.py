@@ -196,7 +196,9 @@ def model_categorize(merchant: str, remittance: str = "", amount: float | None =
     user = f"Merchant: {merchant}\nStatement text: {remittance[:200]}\nDirection: {direction}"
     if provider() == "ollama":
         return _ollama_categorize(user)
-    answer = llm.json_call(name, system=SYSTEM, user=user, schema=SCHEMA, max_tokens=200)
+    import prompts
+    system, prompt = prompts.get("fintnet-categoriser-system")
+    answer = llm.json_call(name, system=system, user=user, schema=SCHEMA, max_tokens=200, prompt=prompt)
     category = answer.get("category") if answer.get("category") in CATEGORIES else "Transfers / Other"
     return {"category": category, "confidence": max(0, min(100, int(answer.get("confidence", 0)))),
             "reason": str(answer.get("reason", ""))[:300], "model": llm.MODEL}

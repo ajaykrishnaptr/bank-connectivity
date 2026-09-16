@@ -60,6 +60,14 @@
     <div class="ai-note">
       {% if result.model %}AI-generated from the figures below.{% else %}Written by FintNet's code; no AI model was called.{% endif %}
       {% if result.trace_id %}Trace <span class="mono">{{ result.trace_id[:12] }}</span>.{% endif %}
+      {% if result.trace_id %}
+      <form method="post" action="{{ url_for('ask_feedback') }}" style="display:inline-flex;gap:.35rem;margin-left:.5rem">
+        <input type="hidden" name="trace_id" value="{{ result.trace_id }}">
+        <input type="hidden" name="question" value="{{ question }}">
+        <button class="btn btn-secondary" name="useful" value="yes" type="submit" style="padding:.1rem .45rem;font-size:.7rem">Useful</button>
+        <button class="btn btn-secondary" name="useful" value="no" type="submit" style="padding:.1rem .45rem;font-size:.7rem">Not useful</button>
+      </form>
+      {% endif %}
     </div>
 
     {% if result.tools %}

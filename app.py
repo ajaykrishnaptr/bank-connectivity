@@ -57,6 +57,7 @@ import db_utils  # noqa: E402
 import eventlog  # noqa: E402
 import ing_client  # noqa: E402
 import llm  # noqa: E402
+import observability  # noqa: E402
 import nordea_client  # noqa: E402
 import psd2_client  # noqa: E402
 import synthbank_client  # noqa: E402
@@ -973,6 +974,7 @@ def login():
             logout_user()
             session.clear()     # never carry one account's session into another
             login_user(user)
+            session["sid"] = uuid.uuid4().hex[:16]   # groups this visit's questions in Langfuse
             user.last_login_at = datetime.now(timezone.utc)
             db.session.commit()
             log.info("auth.login.success", extra={"event": "auth.login.success",
@@ -1627,7 +1629,8 @@ def ask():
     if request.method == "POST":
         question = request.form.get("question", "").strip()
         asked_at = time.time()
-        result = assistant.answer(question, current_user.id, _recurring_summary)
+        result = assistant.answer(question, current_user.id, _recurring_summary,
+                                  session_id=session.get("sid"))
         log.info("assistant.answered", extra={
             "event": "assistant.refused" if result.get("refused") else "assistant.answered",
             "user_id": current_user.id, "question": question[:200], "refused": bool(result.get("refused")),
@@ -1706,6 +1709,21 @@ def _facets(rows: list[dict], limit: int = 5) -> list[dict]:
             out.append({"field": field, "distinct": len(values),
                         "top": [{"value": v, "count": c} for v, c in top]})
     return out
+
+
+@app.route("/ask/feedback", methods=["POST"])
+@login_required
+def ask_feedback():
+    """A reader's verdict on an answer, stored as a Langfuse score on its trace."""
+    trace_id = request.form.get("trace_id", "")
+    useful = request.form.get("useful") == "yes"
+    if trace_id:
+        observability.score_trace(trace_id, "user_feedback", 1 if useful else 0,
+                                  data_type="BOOLEAN", comment=request.form.get("question", "")[:200])
+        log.info("assistant.feedback", extra={"event": "assistant.feedback", "user_id": current_user.id,
+                                              "trace_id": trace_id, "useful": useful})
+        flash("Thanks: your verdict is recorded against this answer's trace.", "success")
+    return redirect(url_for("ask"))
 
 
 @app.route("/ops")

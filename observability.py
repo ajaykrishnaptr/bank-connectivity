@@ -88,7 +88,8 @@ def _sourcetype(as_type: str, name: str) -> str:
 
 @contextmanager
 def _observe(as_type: str, name: str, *, input: Any = None, metadata: dict[str, Any] | None = None,
-             tags: list[str] | None = None, langfuse_kwargs: dict[str, Any] | None = None) -> Iterator[_Observation]:
+             tags: list[str] | None = None, langfuse_kwargs: dict[str, Any] | None = None,
+             user_id: str | None = None, session_id: str | None = None) -> Iterator[_Observation]:
     c = client()
     parent = _current.get()
     started = time.time()
@@ -125,7 +126,11 @@ def _observe(as_type: str, name: str, *, input: Any = None, metadata: dict[str, 
         return
     if as_type == "request":
         from langfuse import propagate_attributes
+        # user_id and session_id turn single traces into per-user and per-conversation
+        # views in Langfuse; they propagate to every child observation.
         with propagate_attributes(trace_name=name, tags=tags or [],
+                                  user_id=str(user_id) if user_id else None,
+                                  session_id=str(session_id) if session_id else None,
                                   metadata={k: str(v) for k, v in (metadata or {}).items()}):
             with c.start_as_current_observation(as_type="span", name=name, input=input) as obs:
                 yield from body(obs)
@@ -137,18 +142,26 @@ def _observe(as_type: str, name: str, *, input: Any = None, metadata: dict[str, 
 
 @contextmanager
 def request(name: str, *, input: Any = None, tags: list[str] | None = None,
-            metadata: dict[str, Any] | None = None) -> Iterator[_Observation]:
+            metadata: dict[str, Any] | None = None, user_id: str | None = None,
+            session_id: str | None = None) -> Iterator[_Observation]:
     """One trace per assistant question or cron run."""
-    with _observe("request", name, input=input, tags=tags, metadata=metadata) as obs:
+    with _observe("request", name, input=input, tags=tags, metadata=metadata,
+                  user_id=user_id, session_id=session_id) as obs:
         yield obs
 
 
 @contextmanager
 def generation(name: str, *, model: str, system: str, messages: Any,
-               model_parameters: dict[str, Any], metadata: dict[str, Any] | None = None) -> Iterator[_Observation]:
+               model_parameters: dict[str, Any], metadata: dict[str, Any] | None = None,
+               prompt: Any = None) -> Iterator[_Observation]:
+    """One model call. `prompt` is a Langfuse prompt object: passing it lets
+    Langfuse report metrics per prompt version."""
+    kwargs: dict[str, Any] = {"model": model, "model_parameters": model_parameters}
+    if prompt is not None:
+        kwargs["prompt"] = prompt
     with _observe("generation", name, input={"system": system, "messages": messages},
                   metadata={"provider": "anthropic", **(metadata or {})},
-                  langfuse_kwargs={"model": model, "model_parameters": model_parameters}) as obs:
+                  langfuse_kwargs=kwargs) as obs:
         yield obs
 
 
@@ -171,6 +184,17 @@ def score(name: str, value: float | str, *, data_type: str = "NUMERIC", comment:
     ctx = _current.get() or {}
     eventlog.emit("fintnet:score", {"trace_id": ctx.get("trace_id"), "span_id": ctx.get("span_id"),
                                     "name": name, "value": value, "comment": comment})
+
+
+def score_trace(trace_id: str, name: str, value: float | str, *, data_type: str = "NUMERIC",
+                comment: str | None = None) -> bool:
+    """Score a trace after it finished, for example a reader's thumbs up on an answer."""
+    c = client()
+    if c is not None:
+        c.create_score(trace_id=trace_id, name=name, value=value, data_type=data_type, comment=comment)
+        c.flush()
+    eventlog.emit("fintnet:score", {"trace_id": trace_id, "name": name, "value": value, "comment": comment})
+    return c is not None
 
 
 def flush() -> None:

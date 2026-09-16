@@ -26,6 +26,7 @@ import currency_utils
 import db_utils
 import llm
 import observability
+import prompts
 from models import Account, BankConnection, Transaction, db
 
 MAX_ROUNDS = 6
@@ -39,18 +40,7 @@ _REFUSE = re.compile(
 REFUSAL = ("I can't help with credit, loans or investment decisions. I can answer questions about your "
            "spending, income, balances and recurring payments across your connected banks.")
 
-SYSTEM_TEMPLATE = """You answer questions about the user's own money across all the bank accounts they connected to FintNet (PSD2 account information, read-only).
-
-Today is {today}. Connected banks: {banks}. Data covers {coverage}.
-
-Rules:
-- Every number in your answer must come from a tool result in this conversation. Never estimate, extrapolate or do arithmetic the tools did not return; if you need a figure, call a tool that returns it.
-- Amounts are in EUR unless a tool says otherwise. Say which period a figure covers.
-- Income and spending figures leave out transfers between the user's own accounts; they only move money between banks.
-- If the data does not cover the question (dates outside the coverage, a bank that is not connected), say so plainly.
-- Do not give credit, loan, creditworthiness or investment advice; say you can only describe their spending and income.
-- Answer in at most 5 short sentences or a short list. Name merchants, categories and banks as the tools return them.
-- Resolve relative dates ("last month", "March") against today's date before calling tools."""
+# The system prompt lives in Langfuse (prompts.py holds the fallback text).
 
 TOOLS: list[dict] = [
     {"name": "list_accounts",
@@ -250,11 +240,12 @@ class Tools:
             return {"error": f"bad arguments: {exc}"}
 
 
-def answer(question: str, user_id: int, recurring_fn: Callable[[], dict]) -> dict:
+def answer(question: str, user_id: int, recurring_fn: Callable[[], dict], session_id: str | None = None) -> dict:
     """Answer one question. Returns answer text, the tool calls made, and bookkeeping."""
     question = (question or "").strip()[:500]
-    with observability.request("assistant-question", input={"question": question},
-                               tags=["assistant"], metadata={"user_id": user_id}) as req:
+    with observability.request("assistant-question", input={"question": question}, tags=["assistant"],
+                               metadata={"user_id": user_id}, user_id=f"user-{user_id}",
+                               session_id=session_id) as req:
         if not question:
             return {"answer": "Ask a question about your money.", "tools": [], "refused": False}
         if _REFUSE.search(question):
@@ -268,15 +259,15 @@ def answer(question: str, user_id: int, recurring_fn: Callable[[], dict]) -> dic
         tools = Tools(user_id, recurring_fn)
         # Generated-account connections are stored as gen_<bank>; the model sees the bank itself.
         banks = sorted({c.bank.removeprefix("gen_") for c in BankConnection.query.filter_by(user_id=user_id, status="active")})
-        system = SYSTEM_TEMPLATE.format(today=date.today().isoformat(), banks=", ".join(banks) or "none",
-                                        coverage=tools.coverage())
+        system, prompt = prompts.compile("fintnet-assistant-system", today=date.today().isoformat(),
+                                         banks=", ".join(banks) or "none", coverage=tools.coverage())
         messages: list[dict] = [{"role": "user", "content": question}]
         trail: list[dict] = []
         final_text = ""
         for round_no in range(MAX_ROUNDS):
             try:
                 response = llm.create("assistant-turn", system=system, messages=messages, tools=TOOLS,
-                                      max_tokens=MAX_TOKENS, metadata={"round": round_no})
+                                      max_tokens=MAX_TOKENS, metadata={"round": round_no}, prompt=prompt)
             except llm.LLMUnavailable as exc:
                 final_text = f"The assistant could not finish: {exc}."
                 break
