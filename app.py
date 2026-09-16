@@ -27,11 +27,13 @@ Things this file deliberately does NOT do:
 Keep route handlers small. Anything more than ~30 lines of logic
 belongs in a helper above so the routes stay readable.
 """
+import json
 import os
 import time
 import uuid
 from collections import defaultdict
 from datetime import date, datetime, timedelta, timezone
+from pathlib import Path
 from statistics import mean, median
 from urllib.parse import parse_qs, urlparse
 
@@ -1670,9 +1672,34 @@ _SPL_EXAMPLES = [
     ("Job runs", "sourcetype=fintnet:cron | stats count by name, status"),
     ("Failures", "status=error"),
 ]
-_OPS_TABS = (("overview", "Overview"), ("search", "Search"), ("jobs", "Jobs"), ("trust", "Trust chain"))
+_OPS_TABS = (("overview", "Overview"), ("search", "Search"), ("jobs", "Jobs"), ("trust", "Trust chain"),
+             ("how", "How things work"))
 # Fields worth summarising beside search results, in the order they are shown.
 _FACET_FIELDS = ("event", "sourcetype", "bank", "status", "status_code", "path", "name", "email", "data", "view")
+
+
+def _latest_assistant_eval() -> dict | None:
+    """The newest assistant experiment saved by evals/assistant_experiment.py.
+
+    Read only by the "How things work" tab, to show the last run beside the
+    explanation. evals/results/ is gitignored, so a deployment has nothing to
+    read and the tab falls back to the structure and a link to Langfuse.
+    Cases are ordered by the judge's overall score, weakest first, because the
+    disagreements between the graders are the point of the table.
+    """
+    try:
+        files = sorted((Path(__file__).parent / "evals" / "results").glob("assistant_*.json"))
+        data = json.loads(files[-1].read_text()) if files else None
+    except (OSError, ValueError, IndexError):
+        return None
+    if not data:
+        return None
+    items = data.get("items") or []
+    items.sort(key=lambda i: ((i.get("scores") or {}).get("judge_overall", 99),
+                              (i.get("scores") or {}).get("correct", 0)))
+    return {"run": data.get("runName"), "meta": data.get("metadata") or {}, "url": data.get("datasetRunUrl"),
+            "scores": data.get("scores") or {}, "usage": data.get("llmUsage") or {}, "items": items,
+            "judged": sum(1 for i in items if "judge_overall" in (i.get("scores") or {}))}
 
 
 def _histogram(rows: list[dict], window: str) -> list[dict]:
@@ -1769,7 +1796,9 @@ def ops():
                            query=query, window=window, windows=list(_EVENT_WINDOWS) + ["all"],
                            result=found, search_error=error, counts=counts,
                            histogram=_histogram(matched, window), facets=_facets(matched),
-                           event_store=eventlog.backend(), examples=_SPL_EXAMPLES)
+                           event_store=eventlog.backend(), examples=_SPL_EXAMPLES,
+                           how=_latest_assistant_eval() if tab == "how" else None,
+                           judge_model=os.getenv("JUDGE_MODEL", "openai/gpt-oss-120b"))
 
 
 # ── Account detail views (live API, DB-backed credentials) ───────────────────

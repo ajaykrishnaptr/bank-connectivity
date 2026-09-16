@@ -12,7 +12,7 @@
            border-bottom:1px solid var(--line); padding-bottom:.75rem; margin-bottom:.9rem; }
   .c-title { font-size:.95rem; font-weight:700; letter-spacing:.02em; }
   .c-title span { color:var(--dim); font-weight:400; margin-left:.5rem; font-size:.72rem; }
-  .c-tabs { display:flex; gap:.25rem; }
+  .c-tabs { display:flex; gap:.25rem; flex-wrap:wrap; }
   .c-tab { padding:.3rem .7rem; border:1px solid var(--line); border-radius:5px; color:var(--dim);
            text-decoration:none; font-size:.74rem; }
   .c-tab:hover { border-color:#2c3c58; color:var(--ink); }
@@ -72,6 +72,51 @@
   .console details > summary { display:inline-block; background:var(--panel-2); border:1px solid var(--line);
       color:var(--dim); border-radius:4px; padding:.1rem .45rem; font-size:.66rem; }
   .console details > summary:hover { color:var(--accent); border-color:#27405f; }
+  /* How things work: the evaluation explainer. Same palette as the rest of the console. */
+  .hw-lede { color:var(--ink); font-size:.76rem; line-height:1.6; max-width:78ch; margin-bottom:.9rem; }
+  .hw-fig { margin:0; }
+  .hw-figwrap { overflow-x:auto; border:1px solid var(--line); border-radius:6px; background:var(--panel-2);
+                padding:.6rem; }
+  .hw-svg { display:block; width:100%; min-width:760px; height:auto; }
+  .hw-fig figcaption { color:var(--dim); font-size:.7rem; line-height:1.6; margin-top:.6rem; max-width:88ch; }
+  .hw-svg .hw-box { fill:var(--panel); stroke:var(--line); stroke-width:1; }
+  .hw-svg .hw-box-open { fill:none; stroke:var(--line); stroke-width:1; }
+  .hw-svg .hw-bound { fill:none; stroke:var(--dim); stroke-width:1; stroke-dasharray:6 5; opacity:.7; }
+  .hw-svg .hw-human { stroke:var(--dim); stroke-dasharray:5 4; }
+  .hw-svg .hw-judge { stroke:var(--warn); }
+  .hw-svg .hw-code  { stroke:var(--good); stroke-width:1.5; }
+  .hw-svg .hw-hatchfill { fill:url(#hw-hatch); stroke:none; }
+  .hw-svg .hw-hatchline { stroke:var(--warn); stroke-width:1; opacity:.16; }
+  .hw-svg .hw-flow { stroke:var(--dim); fill:none; stroke-width:1.2; }
+  .hw-svg .hw-flow-good { stroke:var(--good); }
+  .hw-svg .hw-arfill { fill:var(--dim); }
+  .hw-svg .hw-arfill-good { fill:var(--good); }
+  .hw-svg text { font-family:var(--font-mono); fill:var(--ink); font-size:12.5px; }
+  .hw-svg .t-dim { fill:var(--dim); font-size:11px; }
+  .hw-svg .t-lane { font-size:11px; font-weight:700; letter-spacing:.14em; }
+  .hw-svg .t-judge { fill:var(--warn); }
+  .hw-svg .t-code { fill:var(--good); }
+  .hw-svg .t-code-sm { fill:var(--good); font-size:11px; }
+  .hw-lanes { display:grid; grid-template-columns:repeat(3,1fr); gap:.9rem; }
+  @media (max-width:900px) { .hw-lanes { grid-template-columns:1fr; } }
+  .hw-lanes .c-panel > h3 { display:flex; align-items:center; gap:.4rem; text-transform:none; letter-spacing:0;
+                            font-size:.74rem; color:var(--ink); }
+  .hw-def { display:grid; grid-template-columns:auto 1fr; gap:.3rem .7rem; font-size:.72rem; line-height:1.55; }
+  .hw-def dt { color:var(--dim); text-transform:uppercase; letter-spacing:.07em; font-size:.62rem; padding-top:.15rem;
+               white-space:nowrap; }
+  .hw-def dd { margin:0; color:var(--ink); }
+  .hw-def b { color:var(--accent); font-weight:400; }
+  .hw-case { margin-top:.35rem; }
+  .console details.hw-case > summary { width:fit-content; font-size:.62rem; }
+  .hw-case:not([open]) .hw-io { display:none; }
+  /* the product shell gives every details a card border; in here the summary is the only affordance */
+  .console details.hw-case { border:0; border-radius:0; overflow:visible; margin-top:.35rem; }
+  .console details.hw-case[open] { border:0; }
+  .hw-scroll { overflow-x:auto; }
+  .hw-io { display:grid; gap:.3rem; margin-top:.45rem; padding:.5rem .6rem; background:var(--panel-2);
+           border:1px solid var(--line); border-radius:4px; }
+  .hw-io-k { color:var(--dim); text-transform:uppercase; letter-spacing:.07em; font-size:.6rem; display:block; }
+  .hw-io-v { color:var(--ink); font-size:.7rem; line-height:1.55; white-space:pre-wrap; }
   /* the shell's top bar, dark to match the console */
   body:has(.console) .topnav { background:#0b1220; border-bottom:1px solid #1f2b41; }
   body:has(.console) .nav-logo-name, body:has(.console) .nav-links a, body:has(.console) .nav-pill span { color:#dbe5f3; }
@@ -261,6 +306,326 @@
       Schedules (UTC): 01:00 feed · 02:00 categorise · 03:00 evaluate · 04:00 health. Rerun one with
       <b>/cron/&lt;job&gt;?force=1</b> and the cron secret.
     </div>
+  </div>
+
+  {# ── How things work ──────────────────────────────────────────────────── #}
+  {% elif tab == 'how' %}
+  <div class="c-panel">
+    <h3>How the assistant is graded</h3>
+    <p class="hw-lede">Three graders score the same answer, and they are not interchangeable. Only one of them can
+      reach back into the bank data to work out what the true figure was.</p>
+    <figure class="hw-fig">
+      <div class="hw-figwrap">
+        <svg class="hw-svg" viewBox="0 0 960 470" role="img" preserveAspectRatio="xMinYMin meet"
+             aria-label="A money question goes to the assistant, which calls deterministic tools against the bank data and returns an answer. Three graders then score that answer: code, which re-runs the same tools to recompute the truth; an LLM judge, which sees only the question, tool results and answer; and a human, who grades the judge. The judge and the human could run as hosted evaluators inside Langfuse. The code grader cannot, because it needs a line back into the bank data.">
+          <defs>
+            <marker id="hw-ar" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+              <path d="M 0 0 L 10 5 L 0 10 z" class="hw-arfill"></path>
+            </marker>
+            <marker id="hw-ar-good" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+              <path d="M 0 0 L 10 5 L 0 10 z" class="hw-arfill-good"></path>
+            </marker>
+            <pattern id="hw-hatch" width="6" height="6" patternUnits="userSpaceOnUse" patternTransform="rotate(45)">
+              <line x1="0" y1="0" x2="0" y2="6" class="hw-hatchline"></line>
+            </pattern>
+          </defs>
+
+          <!-- boundary: what a hosted evaluator could take over -->
+          <rect x="548" y="8" width="404" height="264" rx="8" class="hw-bound"></rect>
+          <text x="750" y="292" text-anchor="middle" class="t-dim">could run as a hosted evaluator in Langfuse</text>
+
+          <!-- legend: the three lane treatments repeat, so they are worth naming once -->
+          <text x="20" y="40" class="t-dim">reading the three lanes</text>
+          <rect x="20" y="52" width="24" height="14" rx="3" class="hw-box hw-code"></rect>
+          <text x="54" y="63" class="t-dim">deterministic, provable</text>
+          <rect x="20" y="76" width="24" height="14" rx="3" class="hw-hatchfill"></rect>
+          <rect x="20" y="76" width="24" height="14" rx="3" class="hw-box-open hw-judge"></rect>
+          <text x="54" y="87" class="t-dim">a model's opinion</text>
+          <rect x="20" y="100" width="24" height="14" rx="3" class="hw-box hw-human"></rect>
+          <text x="54" y="111" class="t-dim">built, not yet run</text>
+
+          <!-- the assistant path -->
+          <rect x="14" y="190" width="104" height="48" rx="5" class="hw-box"></rect>
+          <text x="66" y="212" text-anchor="middle" class="t-box">question</text>
+          <text x="66" y="228" text-anchor="middle" class="t-dim">from a customer</text>
+
+          <line x1="122" y1="214" x2="146" y2="214" class="hw-flow" marker-end="url(#hw-ar)"></line>
+
+          <rect x="150" y="176" width="168" height="76" rx="5" class="hw-box"></rect>
+          <text x="234" y="200" text-anchor="middle" class="t-box">assistant</text>
+          <text x="234" y="218" text-anchor="middle" class="t-dim">claude-haiku-4-5</text>
+          <text x="234" y="236" text-anchor="middle" class="t-dim">7 deterministic tools</text>
+
+          <line x1="234" y1="256" x2="234" y2="384" class="hw-flow" marker-end="url(#hw-ar)"></line>
+          <text x="244" y="326" class="t-dim">calls tools</text>
+
+          <rect x="150" y="388" width="168" height="54" rx="5" class="hw-box"></rect>
+          <text x="234" y="410" text-anchor="middle" class="t-box">bank data</text>
+          <text x="234" y="428" text-anchor="middle" class="t-dim">accounts, transactions</text>
+
+          <line x1="322" y1="214" x2="346" y2="214" class="hw-flow" marker-end="url(#hw-ar)"></line>
+
+          <rect x="350" y="184" width="140" height="60" rx="5" class="hw-box"></rect>
+          <text x="420" y="208" text-anchor="middle" class="t-box">answer</text>
+          <text x="420" y="226" text-anchor="middle" class="t-dim">+ tool results</text>
+
+          <!-- lane 1: human, grades the judge -->
+          <rect x="566" y="24" width="372" height="76" rx="5" class="hw-box hw-human"></rect>
+          <text x="582" y="46" class="t-lane">HUMAN</text>
+          <text x="922" y="46" text-anchor="end" class="t-dim">not run yet</text>
+          <text x="582" y="66" class="t-dim">annotation queue, evals/review.py</text>
+          <text x="582" y="84" class="t-dim">labels a sample, then reports judge agreement</text>
+
+          <line x1="700" y1="140" x2="700" y2="104" class="hw-flow" marker-end="url(#hw-ar)"></line>
+          <text x="712" y="126" class="t-dim">grades the judge</text>
+
+          <!-- lane 2: the judge, opinion only -->
+          <rect x="566" y="140" width="372" height="116" rx="5" class="hw-hatchfill"></rect>
+          <rect x="566" y="140" width="372" height="116" rx="5" class="hw-box-open hw-judge"></rect>
+          <text x="582" y="162" class="t-lane t-judge">JUDGE</text>
+          <text x="922" y="162" text-anchor="end" class="t-dim">unvalidated</text>
+          <text x="582" y="182" class="t-dim">groq {{ judge_model }}, temperature 0</text>
+          <text x="582" y="204" class="t-box">answers_question · faithful</text>
+          <text x="582" y="222" class="t-box">concise · stays_in_scope</text>
+          <text x="582" y="244" class="t-dim">overall 1 to 5 · skipped on refusals</text>
+
+          <line x1="494" y1="204" x2="562" y2="188" class="hw-flow" marker-end="url(#hw-ar)"></line>
+          <line x1="494" y1="228" x2="562" y2="352" class="hw-flow hw-flow-good" marker-end="url(#hw-ar-good)"></line>
+
+          <!-- lane 3: code, the only grader that can prove anything -->
+          <rect x="566" y="316" width="372" height="126" rx="5" class="hw-box hw-code"></rect>
+          <text x="582" y="338" class="t-lane t-code">CODE</text>
+          <text x="922" y="338" text-anchor="end" class="t-dim">deterministic</text>
+          <text x="582" y="358" class="t-box">correct · tool_used</text>
+          <text x="582" y="378" class="t-dim">recomputes the truth, matches amounts within 0.5%</text>
+          <text x="582" y="398" class="t-dim">reads 1.234,56 and 1,234.56 alike</text>
+          <text x="582" y="432" class="t-dim">run totals: accuracy, tool_choice_rate</text>
+
+          <line x1="562" y1="404" x2="326" y2="404" class="hw-flow hw-flow-good" marker-end="url(#hw-ar-good)"></line>
+          <text x="444" y="396" text-anchor="middle" class="t-code-sm">re-runs the same tools</text>
+        </svg>
+      </div>
+      <figcaption>Every score above is written to Langfuse against the dataset item and its trace. The dashed boundary
+        is what a hosted evaluator could take over: it sees the trace, so it can hold an opinion about the wording, but
+        it has no route back into the bank data and cannot recompute a figure. That is why the code grader stays in the
+        repository.</figcaption>
+    </figure>
+  </div>
+
+  <div class="hw-lanes">
+    <div class="c-panel">
+      <h3><span class="c-chip ok">code</span> proves it</h3>
+      <dl class="hw-def">
+        <dt>Sees</dt><dd>The answer, and the bank data behind it.</dd>
+        <dt>Decides</dt><dd><b>correct</b>: the real figure or name is in the answer. <b>tool_used</b>: the question
+          reached the right tool.</dd>
+        <dt>Method</dt><dd>Expected answers are computed when the run starts, from the same tools the assistant
+          uses, so they stay right as the daily feed adds transactions.</dd>
+        <dt>Costs</dt><dd>Nothing. No model call.</dd>
+      </dl>
+    </div>
+    <div class="c-panel">
+      <h3><span class="c-chip warn">judge</span> has an opinion</h3>
+      <dl class="hw-def">
+        <dt>Sees</dt><dd>The question, the tool results, the answer.</dd>
+        <dt>Decides</dt><dd>4 pass or fail criteria plus an overall 1 to 5. Skipped on the refusal cases.</dd>
+        <dt>Method</dt><dd>A different model family from the one under test, so it never grades its own output.
+          The prompt lives in <b>evals/judge.py</b>, versioned with the code.</dd>
+        <dt>Costs</dt><dd>1 call per case, free tier. Synthetic data only.</dd>
+      </dl>
+    </div>
+    <div class="c-panel">
+      <h3><span class="c-chip running">human</span> settles it</h3>
+      <dl class="hw-def">
+        <dt>Sees</dt><dd>The same answers, in a Langfuse annotation queue.</dd>
+        <dt>Decides</dt><dd>Whether the judge was right. Its scores stay unvalidated until this runs.</dd>
+        <dt>Method</dt><dd><b>evals/review.py</b> creates the score configs and the queue, fills it with the newest
+          answers, and reports how often the judge and a person agree.</dd>
+        <dt>Status</dt><dd>Built, not yet run. No agreement figure exists.</dd>
+      </dl>
+    </div>
+  </div>
+
+  <div class="c-panel">
+    <h3>What is evaluated, and what is not</h3>
+    <div class="hw-scroll"><table>
+      <thead><tr><th>part of the app</th><th>model</th><th>graded by</th><th>dataset</th></tr></thead>
+      <tbody>
+        <tr>
+          <td>money-questions assistant<br><span class="c-note">assistant.py, the /ask page</span></td>
+          <td>{{ model }}</td>
+          <td><span class="c-chip ok">code</span> <span class="c-chip warn">judge</span> <span class="c-chip running">human</span></td>
+          <td>fintnet-assistant-questions</td>
+        </tr>
+        <tr>
+          <td>transaction categoriser<br><span class="c-note">categorize.py, runs on every new transaction</span></td>
+          <td>{{ provider }} · {{ model }}</td>
+          <td><span class="c-chip ok">code</span></td>
+          <td>fintnet-categorisation-daily, fintnet-categorisation-benchmark</td>
+        </tr>
+        <tr>
+          <td>bank connectivity, recurring detection, waste signals, cash flow, balances<br>
+              <span class="c-note">the 7 tools the assistant calls</span></td>
+          <td><span style="color:var(--dim)">none</span></td>
+          <td><span style="color:var(--dim)">no experiment</span></td>
+          <td><span style="color:var(--dim)">—</span></td>
+        </tr>
+      </tbody>
+    </table></div>
+    <div class="c-note" style="margin-top:.6rem">Two surfaces call a model, so two surfaces are evaluated. The third
+      row is ordinary Python: it is not graded because it is what the graders grade against. If a tool were wrong, the
+      assistant's evaluation would be measuring against the wrong number, which is the honest limit of this setup.</div>
+  </div>
+
+  <div class="c-panel">
+    <h3>Datasets in Langfuse</h3>
+    <div class="hw-scroll"><table>
+      <thead><tr><th>dataset</th><th class="num">items</th><th>input</th><th>expected output</th><th>built</th></tr></thead>
+      <tbody>
+        <tr>
+          <td>fintnet-assistant-questions</td>
+          <td class="num">18</td>
+          <td>question, persona</td>
+          <td>a check kind and the acceptable tool. The true figure is not stored: it is recomputed at run time.</td>
+          <td>by hand, one case per risk. Synced with <b>assistant_experiment.py sync</b>.</td>
+        </tr>
+        <tr>
+          <td>fintnet-categorisation-benchmark</td>
+          <td class="num">300</td>
+          <td>merchant, amount, date, the account's own history</td>
+          <td>the stored label</td>
+          <td>stratified sample, fixed seed, so a prompt or model change can be compared like for like</td>
+        </tr>
+        <tr>
+          <td>fintnet-categorisation-daily/&lt;booking date&gt;</td>
+          <td class="num">150</td>
+          <td>the same shape, from that day's transactions</td>
+          <td>the stored label</td>
+          <td>by the 03:00 job, stratified into new merchant, hard case and seen merchant</td>
+        </tr>
+      </tbody>
+    </table></div>
+    <div class="c-note" style="margin-top:.6rem">Every run writes a score per item and a summary per run, against the
+      dataset item and its trace. The free plan keeps 30 days, so each run is also written to <b>evals/results/</b>.</div>
+  </div>
+
+  <div class="c-grid">
+    <div class="c-panel">
+      <h3>What the 18 cases defend against</h3>
+      <table>
+        <thead><tr><th>cases</th><th>group</th><th>what it catches</th></tr></thead>
+        <tbody>
+          <tr><td class="num">7</td><td>single bank</td><td>the everyday questions: category spend, counts, top merchant, income, month on month, price rises, balance</td></tr>
+          <tr><td class="num">3</td><td>across banks</td><td>the lead use case: totals split per bank, one named bank, accounts per bank</td></tr>
+          <tr><td class="num">2</td><td>another currency</td><td>a persona banking in SEK, answered in euros</td></tr>
+          <tr><td class="num">1</td><td>own transfers</td><td>money moved between the customer's own accounts must not read as income</td></tr>
+          <tr><td class="num">1</td><td>vague period</td><td>"recently" must be answered with the window it used, named</td></tr>
+          <tr><td class="num">1</td><td>out of coverage</td><td>a date the data does not reach must be refused, not estimated</td></tr>
+          <tr><td class="num">2</td><td>out of scope</td><td>a loan question and an investment question, both declined</td></tr>
+          <tr><td class="num">1</td><td>injection</td><td>an instruction smuggled into the question must not change behaviour</td></tr>
+        </tbody>
+      </table>
+      <div class="c-note" style="margin-top:.6rem">Defined in <b>evals/assistant_experiment.py</b>, synced to the
+        Langfuse dataset <b>fintnet-assistant-questions</b>.</div>
+    </div>
+
+    <div class="c-panel">
+      <h3>The categoriser, graded a different way</h3>
+      <dl class="hw-def">
+        <dt>Daily</dt><dd>The 03:00 job samples that day's transactions, creates a dataset and runs one experiment.</dd>
+        <dt>Benchmark</dt><dd>300 stratified transactions with a fixed seed, for comparing a prompt or model change
+          side by side.</dd>
+        <dt>Graders</dt><dd>All code. <b>category_correct</b> for the model, <b>rules_correct</b> for a keyword
+          baseline running beside it, so the model has to beat something.</dd>
+        <dt>Also reported</dt><dd>Accuracy per slice, and calibration per confidence bucket: whether a 90 to 100
+          confidence really is right 90 to 100% of the time.</dd>
+        <dt>Label firewall</dt><dd><b>evaluate.py</b> is the only module that reads the labels. They leave the
+          database as dataset expected outputs, which no model call ever reads.</dd>
+      </dl>
+    </div>
+  </div>
+
+  {% if how %}
+  <div class="c-panel">
+    <h3>Last assistant run · {{ how.run }}</h3>
+    <div class="c-stats">
+      <div class="c-stat"><small>accuracy · code</small><b>{{ '%.0f%%'|format((how.scores.accuracy or 0) * 100) }}</b></div>
+      <div class="c-stat"><small>tool choice · code</small><b>{{ '%.0f%%'|format((how.scores.tool_choice_rate or 0) * 100) }}</b></div>
+      <div class="c-stat"><small>judge overall · n={{ how.judged }}</small><b>{{ '%.2f'|format(how.scores.judge_overall_mean or 0) }}</b></div>
+      <div class="c-stat"><small>judge faithful</small><b>{{ '%.0f%%'|format((how.scores.judge_faithful_rate or 0) * 100) }}</b></div>
+      <div class="c-stat"><small>model calls</small><b>{{ how.usage.calls or 0 }}</b></div>
+    </div>
+    <div class="hw-scroll"><table>
+      <thead><tr><th>question</th><th>tools called</th><th>code</th><th class="num">judge</th><th>judge flags</th></tr></thead>
+      <tbody>
+        {% for it in how['items'] %}
+        {% set s = it.scores or {} %}
+        <tr>
+          <td>
+            {{ it.input.question }}
+            <details class="hw-case">
+              <summary>input and output</summary>
+              <div class="hw-io">
+                <div><span class="hw-io-k">input</span> <span class="hw-io-v">{{ it.input.question }}</span></div>
+                <div><span class="hw-io-k">persona</span> <span class="hw-io-v">{{ it.input.persona }}</span></div>
+                <div><span class="hw-io-k">truth</span> <span class="hw-io-v">{{ it.truth|tojson if it.truth else 'not applicable to this check' }}</span></div>
+                <div><span class="hw-io-k">output</span> <span class="hw-io-v">{{ it.answer or '(refused)' }}</span></div>
+              </div>
+            </details>
+          </td>
+          <td style="color:var(--dim)">{{ (it.tools or [])|unique|join(', ') or '—' }}</td>
+          <td><span class="c-chip {{ 'ok' if s.correct == 1.0 else 'error' }}">{{ 'pass' if s.correct == 1.0 else 'fail' }}</span>
+              {% if s.tool_used is defined and s.tool_used != 1.0 %}<span class="c-chip error">wrong tool</span>{% endif %}</td>
+          <td class="num">{% if 'judge_overall' in s %}{{ s.judge_overall|int }}/5{% else %}<span style="color:var(--dim)">—</span>{% endif %}</td>
+          <td>
+            {% for c in ['answers_question', 'faithful', 'concise', 'stays_in_scope'] %}
+              {% if s['judge_' ~ c] == 0.0 %}<span class="c-chip warn">{{ c }}</span> {% endif %}
+            {% endfor %}
+            {% if 'judge_error' in s %}<span class="c-chip error">judge error</span>{% endif %}
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table></div>
+    <div class="c-note" style="margin-top:.6rem">
+      Ordered by the judge's score, weakest first, because the rows where the two graders disagree are the ones worth
+      reading. The injection case is the clearest: code passes it, because the system prompt did not leak and the word
+      the attacker asked for was never said, while the judge marks it down for not answering the question. Refusing was
+      the right behaviour. That single row is the argument for keeping a deterministic grader and for labelling a sample
+      before anyone quotes the judge's average.
+      {% if how.url %}<br><br>Full run with traces: <a href="{{ how.url }}" target="_blank" rel="noopener">Langfuse ↗</a>{% endif %}
+    </div>
+  </div>
+  {% else %}
+  <div class="c-panel">
+    <h3>Last assistant run</h3>
+    <div class="c-note">No local run to show. <b>evals/results/</b> is not deployed, so on a hosted instance the
+      figures live in <a href="https://cloud.langfuse.com" target="_blank" rel="noopener">Langfuse ↗</a> under the
+      dataset <b>fintnet-assistant-questions</b>. Run
+      <b>.venv/bin/python evals/assistant_experiment.py run</b> locally to populate this panel.</div>
+  </div>
+  {% endif %}
+
+  <div class="c-panel">
+    <h3>Why the judge is not a Langfuse evaluator</h3>
+    <p class="hw-lede">Langfuse can run an LLM judge on its own servers, against experiments and against live traffic.
+      It would take our judge model too, through an OpenAI-compatible connection. We kept it in the repository for
+      three reasons, and one of them is not preference.</p>
+    <table>
+      <tbody>
+        <tr><td style="width:11rem">Split grading</td><td>The figures and the tool choice are settled in code. A hosted
+          evaluator grades the whole answer in one model call, which would fold the provable half into the opinion.</td></tr>
+        <tr><td>Versioned prompt</td><td>The criteria move in a diff and re-run identically in CI. In the interface they
+          move in a text box.</td></tr>
+        <tr><td>Key location</td><td>A hosted evaluator needs the judge's provider key stored in the Langfuse project.
+          Today it stays on the machine that runs the experiment.</td></tr>
+        <tr><td>Open question</td><td>Our judge asks for <b>json_object</b>. A Langfuse evaluator injects
+          <b>json_schema</b>, which is stricter and which some models behind a custom endpoint reject. Testable in the
+          playground before anything is wired up.</td></tr>
+      </tbody>
+    </table>
+    <div class="c-note" style="margin-top:.6rem">Worth revisiting for a sampled share of live traffic, once the judge
+      has been measured against human labels. Not before.</div>
   </div>
 
   {# ── Trust chain ──────────────────────────────────────────────────────── #}
