@@ -27,6 +27,7 @@ import db_utils
 import llm
 import observability
 import prompts
+from categorize import CATEGORIES
 from models import Account, BankConnection, Transaction, db
 
 MAX_ROUNDS = 6
@@ -51,7 +52,8 @@ TOOLS: list[dict] = [
      "input_schema": {"type": "object", "properties": {
          "date_from": {"type": "string", "description": "YYYY-MM-DD"},
          "date_to": {"type": "string", "description": "YYYY-MM-DD"},
-         "bank": {"type": "string", "description": "optional bank id: unicredit, commerzbank, nordea or ing"}},
+         "bank": {"type": "string", "description": "optional bank id: unicredit, commerzbank, nordea or ing"},
+         "category": {"type": "string", "description": "optional single category, e.g. Groceries"}},
          "required": ["date_from", "date_to"], "additionalProperties": False}},
     {"name": "top_merchants",
      "description": "Merchants the user paid most between two dates, in EUR, optionally within one category.",
@@ -73,7 +75,7 @@ TOOLS: list[dict] = [
      "description": "Recurring payments (fixed subscriptions and variable bills), recurring income, and wasted-spend signals such as price rises and duplicate subscriptions.",
      "input_schema": {"type": "object", "properties": {}, "additionalProperties": False}},
     {"name": "find_transactions",
-     "description": "Individual transactions matching filters, newest first, at most 25.",
+     "description": "Individual transactions matching filters, newest first, at most 25 listed. count_matched is how many matched in total, so use it for \"how many times\" questions.",
      "input_schema": {"type": "object", "properties": {
          "date_from": {"type": "string"}, "date_to": {"type": "string"}, "category": {"type": "string"},
          "merchant_contains": {"type": "string"},
@@ -88,6 +90,17 @@ def _d(value: Any, default: date) -> date:
         return date.fromisoformat(str(value))
     except (TypeError, ValueError):
         return default
+
+
+def _category(name: str | None) -> str | None:
+    """The app's category whose name matches, whatever case or spacing the model used."""
+    if not name:
+        return None
+    key = re.sub(r"[^a-z]", "", name.lower())
+    for category in CATEGORIES:
+        if re.sub(r"[^a-z]", "", category.lower()) == key:
+            return category
+    return name
 
 
 class Tools:
@@ -141,19 +154,27 @@ class Tools:
                 "accounts_by_bank": {b: sum(1 for a in out if a["bank"] == b) for b in sorted(by_bank)},
                 "note": "balance = sum of stored transactions; totals are computed here, do not add them up yourself"}
 
-    def spending_by_category(self, date_from: str, date_to: str, bank: str | None = None) -> dict:
+    def spending_by_category(self, date_from: str, date_to: str, bank: str | None = None,
+                             category: str | None = None) -> dict:
         d0, d1 = _d(date_from, date.today() - timedelta(days=30)), _d(date_to, date.today())
+        wanted = _category(category)
         totals, counts = defaultdict(float), defaultdict(int)
         for t, a in self._between(d0, d1, bank):
             if float(t.amount or 0) < 0:
                 totals[t.category or "Other"] += -self._eur(t, a)
                 counts[t.category or "Other"] += 1
-        cats = sorted(({"category": c, "eur": round(v, 2), "transactions": counts[c]} for c, v in totals.items()),
-                      key=lambda x: -x["eur"])
+        cats = sorted(({"category": c, "eur": round(v, 2), "transactions": counts[c]} for c, v in totals.items()
+                       if not wanted or c == wanted), key=lambda x: -x["eur"])
+        if wanted and not cats:      # asked for a category with no spending in the period
+            cats = [{"category": wanted, "eur": 0.0, "transactions": 0}]
         total = round(sum(totals.values()), 2)
-        return {"date_from": str(d0), "date_to": str(d1), "bank": bank or "all", "categories": cats,
-                "total_out_eur": total, "transactions": sum(counts.values()),
-                "total_out_excluding_transfers_eur": round(total - totals.get("Transfers / Other", 0), 2)}
+        if wanted:
+            total = round(sum(c["eur"] for c in cats), 2)
+        return {"date_from": str(d0), "date_to": str(d1), "bank": bank or "all", "category": wanted or "all",
+                "categories": cats, "total_out_eur": total,
+                "transactions": sum(c["transactions"] for c in cats) if wanted else sum(counts.values()),
+                "total_out_excluding_transfers_eur": total if wanted else
+                round(total - totals.get("Transfers / Other", 0), 2)}
 
     def top_merchants(self, date_from: str, date_to: str, category: str | None = None, limit: int = 10) -> dict:
         d0, d1 = _d(date_from, date.today() - timedelta(days=30)), _d(date_to, date.today())
@@ -218,11 +239,12 @@ class Tools:
                           direction: str = "any", min_amount_eur: float | None = None, limit: int = 15) -> dict:
         d0, d1 = _d(date_from, date(2000, 1, 1)), _d(date_to, date.today())
         needle = (merchant_contains or "").lower()
-        hits = []
+        wanted = _category(category)     # the model may write "dining" for "Dining"
+        hits, matched = [], 0
         in_range = [(t, a) for t, a in self.all_rows if t.booking_date and d0 <= t.booking_date <= d1]
         for t, a in sorted(in_range, key=lambda x: x[0].booking_date, reverse=True):
             eur = self._eur(t, a)
-            if category and t.category != category:
+            if wanted and (t.category or "") != wanted:
                 continue
             if needle and needle not in (t.creditor_name or t.debtor_name or "").lower():
                 continue
@@ -230,12 +252,15 @@ class Tools:
                 continue
             if min_amount_eur is not None and abs(eur) < float(min_amount_eur):
                 continue
-            hits.append({"date": str(t.booking_date), "bank": a.bank, "counterparty": t.creditor_name or t.debtor_name,
-                         "category": t.category, "amount_native": float(t.amount or 0), "currency": t.currency,
-                         "amount_eur": round(eur, 2), "own_account_transfer": db_utils.is_internal(t, self.own)})
-            if len(hits) >= max(1, min(int(limit or 15), 25)):
-                break
-        return {"transactions": hits, "count_returned": len(hits)}
+            matched += 1
+            if len(hits) < max(1, min(int(limit or 15), 25)):
+                hits.append({"date": str(t.booking_date), "bank": a.bank,
+                             "counterparty": t.creditor_name or t.debtor_name, "category": t.category,
+                             "amount_native": float(t.amount or 0), "currency": t.currency,
+                             "amount_eur": round(eur, 2), "own_account_transfer": db_utils.is_internal(t, self.own)})
+        return {"transactions": hits, "count_returned": len(hits), "count_matched": matched,
+                "category": wanted or "all",
+                "note": "count_matched is every transaction that matched; count_returned is how many are listed"}
 
     def run(self, name: str, args: dict) -> dict:
         fn = getattr(self, name, None)
