@@ -14,11 +14,15 @@ here has the same `transactions: {booked, pending}` skeleton as
 `psd2_client`. Only auth differs.
 """
 import os
+import time as _time
+from urllib.parse import urlparse as _urlparse
 import time
 import uuid
 from datetime import datetime, timedelta
 
 import requests
+
+from logging_config import log
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -98,16 +102,33 @@ def _headers(token: str, consent_id: str | None = None) -> dict:
     return h
 
 
+def _log_call(bank: str, method: str, url: str, status, started: float, error: str | None = None) -> None:
+    """One event per bank API call: what was called, where, with what result.
+
+    These are the live PSD2 sandbox calls, so the operations event log can show
+    the connection is real (`event=bank.api.call | stats count by bank, host`).
+    """
+    parsed = _urlparse(url)
+    log.info("bank.api.call", extra={
+        "event": "bank.api.call", "bank": bank, "method": method, "host": parsed.netloc,
+        "path": parsed.path, "status_code": status, "data": "live sandbox",
+        "latency_ms": int((_time.time() - started) * 1000), "error": error,
+    })
+
+
 def _call(method: str, url: str, **kwargs):
     """Send a request and return decoded JSON. Wraps every `requests`
     failure in CommerzbankApiError so callers catch a single type."""
+    started = _time.time()
     try:
         resp = requests.request(method, url, timeout=_DEFAULT_HTTP_TIMEOUT, **kwargs)
+        _log_call("commerzbank", method, url, resp.status_code, started)
         resp.raise_for_status()
         return resp.json()
     except requests.exceptions.HTTPError as e:
         raise CommerzbankApiError(str(e), status_code=resp.status_code)
     except requests.exceptions.RequestException as e:
+        _log_call("commerzbank", method, url, None, started, error=str(e)[:200])
         raise CommerzbankApiError(f"Request failed: {e}")
 
 

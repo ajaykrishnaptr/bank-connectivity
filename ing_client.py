@@ -32,6 +32,8 @@ string. `get_app_token` is the only function that runs in Mode A.
 import base64
 import hashlib
 import os
+import time as _time
+from urllib.parse import urlparse as _urlparse
 import time
 import uuid
 from datetime import datetime, timedelta
@@ -176,6 +178,20 @@ def _headers(token: str | None, method: str, path_with_query: str,
     return h
 
 
+def _log_call(bank: str, method: str, url: str, status, started: float, error: str | None = None) -> None:
+    """One event per bank API call: what was called, where, with what result.
+
+    These are the live PSD2 sandbox calls, so the operations event log can show
+    the connection is real (`event=bank.api.call | stats count by bank, host`).
+    """
+    parsed = _urlparse(url)
+    log.info("bank.api.call", extra={
+        "event": "bank.api.call", "bank": bank, "method": method, "host": parsed.netloc,
+        "path": parsed.path, "status_code": status, "data": "live sandbox",
+        "latency_ms": int((_time.time() - started) * 1000), "error": error,
+    })
+
+
 def _call(method: str, url: str, body: bytes = b"",
           token: str | None = None, params: dict | None = None):
     """Send a fully-signed request and return decoded JSON.
@@ -187,6 +203,7 @@ def _call(method: str, url: str, body: bytes = b"",
     """
     parsed = urlparse(url)
     path   = parsed.path + (f"?{urlencode(params)}" if params else "")
+    started = _time.time()
     try:
         resp = requests.request(
             method, url,
@@ -196,11 +213,13 @@ def _call(method: str, url: str, body: bytes = b"",
             cert=CERT,
             timeout=_DEFAULT_HTTP_TIMEOUT,
         )
+        _log_call("ing", method, url, resp.status_code, started)
         resp.raise_for_status()
         return resp.json()
     except requests.exceptions.HTTPError as e:
         raise INGApiError(str(e), status_code=resp.status_code)
     except requests.exceptions.RequestException as e:
+        _log_call("ing", method, url, None, started, error=str(e)[:200])
         raise INGApiError(f"Request failed: {e}")
 
 

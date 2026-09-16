@@ -32,12 +32,16 @@ Identity threading:
 """
 import logging
 import os
+import time as _time
+from urllib.parse import urlparse as _urlparse
 import random
 import uuid
 from datetime import datetime, timedelta
 from urllib.parse import urlparse
 
 import requests
+
+from logging_config import log
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -117,12 +121,27 @@ def _is_gateway_page(resp) -> bool:
         (h.headers.get("Location") or "").startswith("/my.") for h in resp.history)
 
 
+def _log_call(bank: str, method: str, url: str, status, started: float, error: str | None = None) -> None:
+    """One event per bank API call: what was called, where, with what result.
+
+    These are the live PSD2 sandbox calls, so the operations event log can show
+    the connection is real (`event=bank.api.call | stats count by bank, host`).
+    """
+    parsed = _urlparse(url)
+    log.info("bank.api.call", extra={
+        "event": "bank.api.call", "bank": bank, "method": method, "host": parsed.netloc,
+        "path": parsed.path, "status_code": status, "data": "live sandbox",
+        "latency_ms": int((_time.time() - started) * 1000), "error": error,
+    })
+
+
 def _call(method: str, url: str, **kwargs):
     """Send an mTLS-authenticated request and return decoded JSON.
 
     Translates every `requests` failure mode into PSD2ApiError so
     callers only have to catch one exception type.
     """
+    started = _time.time()
     try:
         resp = _http.request(method, url, cert=CERT, timeout=_DEFAULT_HTTP_TIMEOUT, **kwargs)
         for attempt in range(_GATEWAY_RETRIES):
@@ -133,6 +152,7 @@ def _call(method: str, url: str, **kwargs):
             if "errorcode" in resp.url:
                 _http.cookies.clear()  # the gateway ended the session; start a clean one
             resp = _http.request(method, url, cert=CERT, timeout=_DEFAULT_HTTP_TIMEOUT, **kwargs)
+        _log_call("unicredit", method, url, resp.status_code, started)
         resp.raise_for_status()
         try:
             return resp.json()
@@ -149,10 +169,12 @@ def _call(method: str, url: str, **kwargs):
             raise PSD2ApiError("UniCredit's sandbox sent back an unexpected page instead of data. "
                                "Please try again in a moment.", status_code=resp.status_code)
     except requests.exceptions.SSLError as e:
+        _log_call("unicredit", method, url, None, started, error=f"SSL: {str(e)[:180]}")
         raise PSD2ApiError(f"SSL/certificate error: {e}")
     except requests.exceptions.HTTPError as e:
         raise PSD2ApiError(str(e), status_code=resp.status_code)
     except requests.exceptions.RequestException as e:
+        _log_call("unicredit", method, url, None, started, error=str(e)[:200])
         raise PSD2ApiError(f"Request failed: {e}")
 
 

@@ -631,6 +631,37 @@ def _get_connection(bank: str) -> BankConnection | None:
     ).first()
 
 
+def _bank_evidence() -> dict[str, dict]:
+    """Per bank, what the current user's connection actually is.
+
+    The live sandbox rows carry the bank's API host and the consent or token the
+    bank issued, so the Connect page can show that the connection is a real PSD2
+    sandbox call and not generated data."""
+    hosts = {"unicredit": urlparse(app.config["SANDBOX_BASE_URL"]).netloc,
+             "commerzbank": urlparse(commerzbank_client.BASE_URL).netloc,
+             "nordea": urlparse(nordea_client.BASE_URL).netloc,
+             "ing": urlparse(ing_client.BASE_URL).netloc}
+    out: dict[str, dict] = {}
+    for bank, host in hosts.items():
+        live = _get_connection(bank)
+        gen = _get_connection(synthbank_store.GEN_PREFIX + bank)
+        accounts = _acct_query().filter(Account.bank == bank).all()
+        live_accounts = [a for a in accounts if not (a.resource_id or "").startswith("SB-")]
+        gen_accounts = [a for a in accounts if (a.resource_id or "").startswith("SB-")]
+        reference = (live.consent_id or live.access_token or "") if live else ""
+        out[bank] = {
+            "api_host": host,
+            "live": bool(live),
+            "generated": bool(gen),
+            "reference": ("…" + reference[-8:]) if reference else "",
+            "reference_kind": "consent" if (live and live.consent_id) else ("token" if live else ""),
+            "live_accounts": len(live_accounts),
+            "generated_accounts": len(gen_accounts),
+            "last_sync": max([a.fetched_at for a in accounts if a.fetched_at], default=None),
+        }
+    return out
+
+
 def _demo_profile() -> dict | None:
     """Name, home bank and banks with generated accounts for a demo login; None for sign-ups."""
     cust = _demo_customer()
@@ -819,6 +850,7 @@ def index():
         savings_breakdown=savings_breakdown,
         sandbox_login=SANDBOX_LOGIN,
         demo=_demo_profile(),
+        evidence=_bank_evidence(),
     )
 
 

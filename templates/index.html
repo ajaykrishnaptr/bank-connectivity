@@ -324,6 +324,19 @@
           Since {{ conn.connected_at.strftime('%d %b %Y') if conn.connected_at }}
         </span>
       </div>
+      {% set ev = evidence.get(bank_id) %}
+      {% if ev and (ev.live or ev.generated) %}
+      <div style="font-size:.68rem;color:var(--text-3);line-height:1.6;margin-bottom:.75rem">
+        {% if ev.live %}
+        <div><span style="color:#047857;font-weight:700">Live PSD2 sandbox</span> · {{ ev.live_accounts }} account{{ '' if ev.live_accounts == 1 else 's' }}</div>
+        <div class="mono" style="font-size:.66rem">{{ ev.api_host }}{% if ev.reference %} · {{ ev.reference_kind }} {{ ev.reference }}{% endif %}</div>
+        {% endif %}
+        {% if ev.generated %}
+        <div><span style="font-weight:700">Generated accounts</span> · {{ ev.generated_accounts }} account{{ '' if ev.generated_accounts == 1 else 's' }}</div>
+        {% endif %}
+        {% if ev.last_sync %}<div>Synced {{ ev.last_sync.strftime('%d %b %H:%M') }} UTC</div>{% endif %}
+      </div>
+      {% endif %}
       <a href="{{ url_for('disconnect', bank=bank_id) }}"
         style="display:block;width:100%;text-align:center;padding:.5rem;
           border-radius:var(--radius-sm);font-size:.8125rem;font-weight:600;
