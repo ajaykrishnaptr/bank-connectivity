@@ -43,6 +43,8 @@ def _own_ibans(c, email):
 SPEND = """select t.* from users u join accounts a on a.user_id=u.id join transactions t on t.account_id=a.id
            where u.email=? and t.amount < 0"""
 INCOME = SPEND.replace("t.amount < 0", "t.amount > 0")
+BASE_ALL = """select t.* from users u join accounts a on a.user_id=u.id join transactions t on t.account_id=a.id
+              where u.email=?"""
 
 def rows(sql, *params):
     with _conn() as c:
@@ -84,7 +86,11 @@ def t_top_category():
 def t_largest_6m():
     rs = spend(" and t.booking_date >= ?", (TODAY - timedelta(days=182)).isoformat())
     return round(max(abs(float(r["amount"])) for r in rs), 2) if rs else 0.0
-def t_count_ing():        return len(rows(SPEND.replace("t.amount < 0", "1=1") + " and a.bank='ing'", PERSONA))
+def t_count_ing():
+    # Every row, own-account transfers included: "how many transactions do I
+    # have" is a count, not a spending figure.
+    with _conn() as c:
+        return len(list(c.execute(BASE_ALL + " and a.bank='ing'", (PERSONA,))))
 def t_aug_vs_jul():
     a, j = month_total("Groceries", 2026, 8), month_total("Groceries", 2026, 7)
     return ("August" if a > j else "July"), a, j

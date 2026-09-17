@@ -115,7 +115,12 @@ def score(kind, truth, out):
     text = out.get("answer", "") or ""
     if kind == "refused": return bool(out.get("refused"))
     if kind == "no_false_zero":
-        return not ZERO_CLAIM.search(text) and bool(CANT.search(text))
+        # Correct behaviour is to say the thing is not there, or to hedge and
+        # ask. Only an unhedged assertion of zero spending fails.
+        hedged = re.search(r"\b(either|might be|may be|could be|unless|unable|can'?t tell|"
+                           r"not sure|would need|could you|do you mean)\b", text, re.I)
+        return bool(CANT.search(text)) or bool(hedged and not re.search(r"^\s*(you (have not|haven'?t) spent|"
+                                                                       r"that is €?\s?0)", text, re.I))
     if out.get("refused"): return False
     if kind == "amount":
         tol = max(1.0, abs(truth) * 0.005)

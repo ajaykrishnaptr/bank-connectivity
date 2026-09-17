@@ -51,7 +51,10 @@ def t_smallest_3m():
     rs = q(OUT + " and t.booking_date >= ?", (TODAY - timedelta(days=91)).isoformat())
     return round(min(abs(float(r["amount"])) for r in rs), 2)
 def t_shopping_h1():   return tot(q(OUT + " and t.category='Shopping' and t.booking_date between ? and ?", "2026-01-01", "2026-06-30"))
-def t_rewe_count():    return len(q(OUT + " and t.creditor_name='REWE' and t.booking_date like '2026-%'"))
+def t_rewe_count():
+    # PAYPAL *REWE and ZETTLE_*REWE are REWE purchases collected over another
+    # rail, so "how many times did I shop at REWE" counts them too.
+    return len(q(OUT + " and lower(t.creditor_name) like '%rewe%' and t.booking_date like '2026-%'"))
 def t_biggest_housing():
     rs = q(OUT + " and t.category='Housing'")
     return round(max(abs(float(r["amount"])) for r in rs), 2)

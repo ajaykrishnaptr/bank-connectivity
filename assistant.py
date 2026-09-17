@@ -248,7 +248,12 @@ class Tools:
             return {"error": f"no connected bank named {bank_asked!r}", "connected_banks": self._banks()}
         wanted = _category(category)
         if wanted == UNRESOLVED_CATEGORY:
-            return {"error": f"there is no category named {category!r}", "valid_categories": list(CATEGORIES)}
+            # Told a category does not exist, the model went on to suggest "Travel",
+            # which does not exist either. Suggestions come from this list only.
+            return {"error": f"there is no category named {category!r}",
+                    "valid_categories": list(CATEGORIES),
+                    "guidance": "Say that this category is not one the app tracks. If you suggest where the "
+                                "spending might sit instead, name only categories from valid_categories."}
         totals, counts = defaultdict(float), defaultdict(int)
         for t, a in self._between(d0, d1, bank):
             if float(t.amount or 0) < 0:
@@ -347,7 +352,12 @@ class Tools:
         needle = (merchant_contains or "").lower()
         wanted = _category(category)     # the model may write "dining" for "Dining"
         if wanted == UNRESOLVED_CATEGORY:
-            return {"error": f"there is no category named {category!r}", "valid_categories": list(CATEGORIES)}
+            # Told a category does not exist, the model went on to suggest "Travel",
+            # which does not exist either. Suggestions come from this list only.
+            return {"error": f"there is no category named {category!r}",
+                    "valid_categories": list(CATEGORIES),
+                    "guidance": "Say that this category is not one the app tracks. If you suggest where the "
+                                "spending might sit instead, name only categories from valid_categories."}
         matched_rows = []
         in_range = [(t, a) for t, a in self.all_rows if t.booking_date and d0 <= t.booking_date <= d1]
         for t, a in in_range:
