@@ -1,0 +1,79 @@
+{# Sign-in for the operations host. It borrows the console's own surface, so the
+   page a person lands on already looks like the system behind it. #}
+<style>
+  body { background: #0b1220 !important; }
+  .page { max-width: 100% !important; padding: 0 !important; }
+  .topnav { background: rgba(11,18,32,.92) !important; border-bottom-color: #1f2b41 !important; }
+  .nav-logo-name { color: #dbe5f3 !important; }
+  .nav-logo-sub { color: #7f90a8 !important; }
+
+  .ops-wrap { min-height: calc(100vh - 56px); display: flex; align-items: center;
+              justify-content: center; padding: 2.5rem 1.5rem; }
+  .ops-card { width: 100%; max-width: 420px; }
+
+  .ops-eyebrow { font-family: var(--font-mono); font-size: .68rem; letter-spacing: .14em;
+                 text-transform: uppercase; color: #5eead4; margin-bottom: .6rem; }
+  .ops-card h1 { font-family: var(--font-mono); font-size: 1.35rem; font-weight: 700;
+                 color: #dbe5f3; letter-spacing: -.01em; margin-bottom: .5rem; }
+  .ops-card .sub { font-size: .82rem; color: #7f90a8; line-height: 1.6; margin-bottom: 1.75rem; }
+
+  .ops-form { background: #111a2b; border: 1px solid #1f2b41; border-radius: 10px;
+              padding: 1.5rem; }
+  .ops-form label { display: block; font-family: var(--font-mono); font-size: .68rem;
+                    letter-spacing: .1em; text-transform: uppercase; color: #7f90a8;
+                    margin-bottom: .4rem; }
+  .ops-form input {
+    width: 100%; padding: .65rem .8rem; margin-bottom: 1rem;
+    background: #0e1626; border: 1px solid #27405f; border-radius: 6px;
+    color: #f1f6ff; font-family: var(--font-mono); font-size: .875rem;
+  }
+  .ops-form input::placeholder { color: #4d5f7a; }
+  .ops-form input:focus-visible { outline: 2px solid #5eead4; outline-offset: 1px; border-color: #5eead4; }
+  .ops-submit {
+    width: 100%; padding: .7rem; border: 1px solid #27405f; border-radius: 6px;
+    background: #16233a; color: #5eead4; cursor: pointer;
+    font-family: var(--font-mono); font-size: .82rem; font-weight: 600; letter-spacing: .04em;
+  }
+  .ops-submit:hover { background: #1b2a42; }
+  .ops-submit:focus-visible { outline: 2px solid #5eead4; outline-offset: 2px; }
+
+  .ops-meta { margin-top: 1.25rem; padding-top: 1rem; border-top: 1px solid #1f2b41;
+              font-family: var(--font-mono); font-size: .68rem; color: #5b6b83; line-height: 1.7; }
+  .ops-meta a { color: #5eead4; }
+  .ops-status { display: inline-flex; align-items: center; gap: .4rem; }
+  .ops-status .dot { width: 6px; height: 6px; border-radius: 50%; background: #34d399; }
+  /* The shell paints flashes light; on this surface they need dark treatment. */
+  .alert { background: #2a0d0d !important; border-color: #7f1d1d !important; color: #fca5a5 !important; }
+</style>
+
+<div class="ops-wrap">
+  <div class="ops-card">
+    <div class="ops-eyebrow">Operations</div>
+    <h1>Console sign-in</h1>
+    <p class="sub">
+      Job runs, the categoriser evaluation, the trust chain, and an event log searched with a
+      subset of SPL.
+    </p>
+
+    <form class="ops-form" method="POST" action="{{ url_for('login') }}">
+      <label for="email">Operator account</label>
+      <input id="email" type="email" name="email" required autocomplete="username"
+             autofocus placeholder="name@domain">
+
+      <label for="password">Password</label>
+      <input id="password" type="password" name="password" required
+             autocomplete="current-password" placeholder="••••••••">
+
+      <button type="submit" class="ops-submit">Sign in</button>
+    </form>
+
+    <div class="ops-meta">
+      <div class="ops-status"><span class="dot"></span>{{ request.host }}</div>
+      <div style="margin-top:.35rem">
+        Operator accounts reach this host. Customer accounts sign in at
+        <a href="{{ product_url }}">{{ product_url | replace("https://", "") }}</a>.
+      </div>
+      <div style="margin-top:.35rem">Every request on this host is written to the event log.</div>
+    </div>
+  </div>
+</div>

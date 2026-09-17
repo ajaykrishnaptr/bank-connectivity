@@ -1,6 +1,10 @@
 {% extends "base.html" %}
 {% block title %}Sign in · FintNet{% endblock %}
 {% block content %}
+{# Three hosts, three sign-ins. Each one looks like the system it opens. #}
+{% if ops_view %}{% include "_login_ops.html" %}
+{% elif pm_view %}{% include "_login_pm.html" %}
+{% else %}
 <style>
   body { background: linear-gradient(135deg,#0a0818 0%,#1a1040 40%,#0d0a26 100%) !important; }
   .page { max-width:100% !important; padding: 0 !important; }
@@ -227,4 +231,5 @@
     });
   });
 </script>
+{% endif %}
 {% endblock %}

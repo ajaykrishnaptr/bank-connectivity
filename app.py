@@ -1816,7 +1816,7 @@ def ask_feedback():
 
 
 _PM_TABS = (("market", "Market"), ("competitors", "Competitors"),
-            ("roadmap", "Roadmap"), ("slides", "Slides"))
+            ("vop", "Account verification"), ("roadmap", "Roadmap"), ("slides", "Slides"))
 
 
 @app.route("/pm")
