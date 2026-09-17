@@ -29,6 +29,7 @@ belongs in a helper above so the routes stay readable.
 """
 import json
 import os
+import re
 import time
 import uuid
 from collections import defaultdict
@@ -39,6 +40,7 @@ from urllib.parse import parse_qs, urlparse
 
 from dotenv import load_dotenv
 from flask import Flask, abort, flash, redirect, render_template, request, session, url_for
+from markupsafe import Markup, escape
 from flask_login import LoginManager, current_user, login_required, login_user, logout_user
 from werkzeug.security import check_password_hash, generate_password_hash
 
@@ -628,8 +630,22 @@ def _split_product_and_ops():
         abort(404)
 
 
+def _answer_html(text: str) -> "Markup":
+    """The assistant writes light markdown; the page was showing the asterisks.
+
+    Escape first, because the text passed through a model, then convert the two
+    things it actually emits: **bold** and *italic*. Everything else stays
+    literal, and the surrounding CSS keeps the line breaks.
+    """
+    out = escape(text or "")
+    out = re.sub(r"\*\*(.+?)\*\*", r"<strong>\1</strong>", str(out), flags=re.S)
+    out = re.sub(r"(?<![\*\w])\*(?!\s)([^*\n]+?)(?<!\s)\*(?![\*\w])", r"<em>\1</em>", out)
+    return Markup(out)
+
+
 app.jinja_env.filters["money"] = _money
 app.jinja_env.filters["bank_name"] = _bank_name
+app.jinja_env.filters["answer_html"] = _answer_html
 app.jinja_env.filters["bank_ink"] = lambda bank: BANK_INK.get(
     (bank or "").replace(synthbank_store.GEN_PREFIX, ""), "#5d6b7d")
 app.jinja_env.tests["generated"] = lambda account: bool(account and (account.resource_id or "").startswith("SB-"))

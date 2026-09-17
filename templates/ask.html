@@ -57,7 +57,7 @@
   {% if result %}
   <div class="card" style="margin-top:1.5rem">
     <div class="card-label">Answer{% if result.refused %} · refused by policy{% endif %}</div>
-    <div class="answer" style="margin-top:.5rem">{{ result.answer }}</div>
+    <div class="answer" style="margin-top:.5rem">{{ result.answer | answer_html }}</div>
     <div class="ai-note">
       {% if result.model %}AI-generated from the figures below.{% else %}Written by FintNet's code; no AI model was called.{% endif %}
       {% if result.trace_id %}Trace <span class="mono">{{ result.trace_id[:12] }}</span>.{% endif %}
@@ -92,7 +92,7 @@
     {% for h in history %}
     <div class="card" style="margin-bottom:.625rem;padding:1rem 1.25rem">
       <div class="fw-600" style="font-size:.85rem">{{ h.q }}</div>
-      <div class="text-muted" style="font-size:.8rem;margin-top:.3rem;white-space:pre-wrap">{{ h.a }}</div>
+      <div class="text-muted" style="font-size:.8rem;margin-top:.3rem;white-space:pre-wrap">{{ h.a | answer_html }}</div>
     </div>
     {% endfor %}
   </div>
