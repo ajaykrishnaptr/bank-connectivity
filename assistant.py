@@ -10,6 +10,8 @@ Guardrails:
   * Credit, loan, creditworthiness and investment questions are refused in
     code before any model call (AI Act Annex III 5(b) keeps credit decisions
     out; investment advice is regulated), and the system prompt repeats it.
+  * Affordability questions ("can I afford X?") are answered in code with the
+    surplus figure only. The judgement is declined and no model is called.
   * At most MAX_ROUNDS tool rounds per question; per-instance call cap in llm.py.
   * Every question is one Langfuse trace; every tool call a child span.
   * The page discloses that answers come from an AI system (AI Act Article 50).
@@ -40,6 +42,33 @@ _REFUSE = re.compile(
 
 REFUSAL = ("I can't help with credit, loans or investment decisions. I can answer questions about your "
            "spending, income, balances and recurring payments across your connected banks.")
+
+# "Can I afford X?" is not a credit decision, so _REFUSE is the wrong tool for
+# it. It is still a judgement about the customer's finances, and the model is
+# not the thing that should be making it. The line we hold is narrower than a
+# refusal: code states the arithmetic it can stand behind, and declines the
+# yes or no. No model call happens on this path at all.
+_AFFORD = re.compile(r"\bafford\b|\bleisten\b|\bdo (i|we) have enough\b|\bcan (i|we) spend\b",
+                     re.IGNORECASE)
+
+
+def _affordability_answer(tools: "Tools") -> str:
+    """The surplus, the window it came from, and what the figure cannot know."""
+    months = tools.monthly_cash_flow(7)["months"]
+    full = [m for m in months if m["month"] != f"{date.today():%Y-%m}"]
+    if not full:
+        return ("Whether you can afford something is your decision, and I won't make it for you. "
+                "I also don't yet hold a full month of history to show you the arithmetic.")
+    nets = [m["net_eur"] for m in full]
+    avg = round(sum(nets) / len(nets), 2)
+    return (
+        "Whether you can afford it is your decision, and I won't make it for you. "
+        f"The arithmetic I can stand behind: across the {len(full)} full months from "
+        f"{full[0]['month']} to {full[-1]['month']}, your income minus your spending averaged "
+        f"{avg:,.2f} EUR a month, ranging from {min(nets):,.2f} to {max(nets):,.2f}. "
+        "That figure knows nothing about your savings, anything you have already committed to, "
+        "or a change in your income, so it is not a yes or a no."
+    )
 
 # The system prompt lives in Langfuse (prompts.py holds the fallback text).
 
@@ -287,11 +316,18 @@ def answer(question: str, user_id: int, recurring_fn: Callable[[], dict], sessio
             observability.score("refused_in_code", 1)
             req.update(output={"answer": REFUSAL, "refused": True})
             return {"answer": REFUSAL, "tools": [], "refused": True, "trace_id": observability.trace_id()}
+
+        tools = Tools(user_id, recurring_fn)
+        if _AFFORD.search(question):
+            bounded = _affordability_answer(tools)
+            observability.score("bounded_in_code", 1)
+            req.update(output={"answer": bounded, "bounded": True})
+            return {"answer": bounded, "tools": [], "refused": False, "bounded": True,
+                    "trace_id": observability.trace_id()}
+
         if not llm.available():
             return {"answer": "The assistant is unavailable right now (no model key or call budget used).",
                     "tools": [], "refused": False}
-
-        tools = Tools(user_id, recurring_fn)
         # Generated-account connections are stored as gen_<bank>; the model sees the bank itself.
         banks = sorted({c.bank.removeprefix("gen_") for c in BankConnection.query.filter_by(user_id=user_id, status="active")})
         system, prompt = prompts.compile("fintnet-assistant-system", today=date.today().isoformat(),
