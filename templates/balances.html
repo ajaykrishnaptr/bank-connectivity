@@ -1,29 +1,58 @@
 {% extends "base.html" %}
+{% block title %}Account balances · {{ bank | bank_name }} · FintNet{% endblock %}
+{% set nav_section = 'index' %}
 {% block content %}
-<h2>Balances</h2>
-<p><a href="{{ url_for('aggregation') }}">← Back to Balances</a></p>
-{% if balances %}
-<table>
-  <thead>
-    <tr>
-      <th>Type</th>
-      <th>Amount</th>
-      <th>Currency</th>
-      <th>Date</th>
-    </tr>
-  </thead>
-  <tbody>
-    {% for b in balances %}
-    <tr>
-      <td>{{ b.get("balanceType", "—") }}</td>
-      <td>{{ b.get("balanceAmount", {}).get("amount", "—") }}</td>
-      <td>{{ b.get("balanceAmount", {}).get("currency", "—") }}</td>
-      <td>{{ b.get("referenceDate", "—") }}</td>
-    </tr>
-    {% endfor %}
-  </tbody>
-</table>
-{% else %}
-<p>No balance data available.</p>
-{% endif %}
+
+<nav class="crumbs" aria-label="Breadcrumb">
+  <a href="{{ url_for('index') }}">Your banks</a>
+  <span class="sep" aria-hidden="true">/</span>
+  <a href="{{ url_for('aggregation') }}">{{ bank | bank_name }}</a>
+  <span class="sep" aria-hidden="true">/</span>
+  <span class="mono">{{ account_id }}</span>
+  <span class="sep" aria-hidden="true">/</span>
+  <span aria-current="page">Balances</span>
+</nav>
+
+<div class="page-header" style="display:flex;align-items:flex-start;justify-content:space-between;flex-wrap:wrap;gap:1rem">
+  <div>
+    <h2>Balances <span class="subtitle">{{ bank | bank_name }}</span></h2>
+    <p>Read live from the bank just now, not from our copy.</p>
+  </div>
+  <a class="btn btn-secondary btn-sm" href="{{ url_for('transactions', account_id=account_id) }}">
+    See transactions <span aria-hidden="true">→</span>
+  </a>
+</div>
+
+<div class="card">
+  <div class="card-section-title">This account</div>
+  {% if balances %}
+  <table>
+    <caption class="visually-hidden">Balances for account {{ account_id }} at {{ bank | bank_name }}</caption>
+    <thead>
+      <tr>
+        <th scope="col">Type</th>
+        <th scope="col" class="text-right">Amount</th>
+        <th scope="col">Currency</th>
+        <th scope="col">As of</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for b in balances %}
+      <tr>
+        <td class="fw-600">{{ b.get("balanceType", "—") }}</td>
+        <td class="text-right mono fw-600">{{ b.get("balanceAmount", {}).get("amount", "—") }}</td>
+        <td>{{ b.get("balanceAmount", {}).get("currency", "—") }}</td>
+        <td class="mono text-muted">{{ b.get("referenceDate", "—") }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <div class="empty">
+    <h3>No balance to show</h3>
+    <p>{{ bank | bank_name }} returned no balance for this account. That usually clears on its own; try again in a moment.</p>
+    <a class="btn btn-secondary btn-sm" href="{{ url_for('balances', account_id=account_id) }}">Try again</a>
+  </div>
+  {% endif %}
+</div>
 {% endblock %}

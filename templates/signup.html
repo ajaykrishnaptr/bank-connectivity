@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% block title %}Create your account · FintNet{% endblock %}
 {% block content %}
 <style>
   body { background: linear-gradient(135deg,#0a0818 0%,#1a1040 40%,#0d0a26 100%) !important; }
@@ -67,7 +68,7 @@
     border-color: #6366f1; background: #fff;
     box-shadow: 0 0 0 3.5px rgba(99,102,241,.14);
   }
-  .fi-input::placeholder { color: #9ca3af; }
+  .fi-input::placeholder { color: #6b7280; }
 
   .fi-submit {
     width: 100%; padding: .8rem;
@@ -148,13 +149,13 @@
           <button type="submit" class="fi-submit" style="margin-top:.25rem">Create FintNet account</button>
         </form>
 
-        <p style="text-align:center;margin-top:1.5rem;font-size:.8125rem;color:#94a3b8">
+        <p style="text-align:center;margin-top:1.5rem;font-size:.8125rem;color:#5d6b7d">
           Already have an account?
           <a href="{{ url_for('login') }}" style="color:#6366f1;font-weight:600;text-decoration:none">Sign in →</a>
         </p>
 
         <div style="margin-top:2rem;padding-top:1.5rem;border-top:1px solid #f1f5f9;text-align:center">
-          <p style="font-size:.75rem;color:#94a3b8;line-height:1.6">
+          <p style="font-size:.75rem;color:#5d6b7d;line-height:1.6">
             Free forever &mdash; no credit card needed. Your data stays private and secure.
           </p>
         </div>

@@ -3,7 +3,10 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>FintNet</title>
+  <meta name="color-scheme" content="light">
+  <meta name="theme-color" content="#2563eb">
+  <meta name="description" content="{% block meta_description %}See every bank account you hold in one place. Track spending, check balances and spot recurring payments.{% endblock %}">
+  <title>{% block title %}FintNet{% endblock %}</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
@@ -18,10 +21,15 @@
       --border:       #e2e8f0;
       --border-light: #f1f5f9;
 
-      /* Text — slate ramp */
+      /* Text — slate ramp.
+         --text-3 is the muted ramp step used for labels, metadata and
+         table headers. It clears 4.5:1 on every surface above, so muted
+         never means unreadable. --text-4 is the only decorative step and
+         is reserved for non-essential glyphs (separators, arrows). */
       --text:         #0f172a;
       --text-2:       #475569;
-      --text-3:       #94a3b8;
+      --text-3:       #5d6b7d;
+      --text-4:       #94a3b8;
 
       /* Brand — corporate blue */
       --accent:       #2563eb;   /* blue-600 */
@@ -31,13 +39,18 @@
       --accent-tint:  #dbeafe;   /* blue-100 */
       --accent-glow:  rgba(37,99,235,.18);
 
-      /* Semantic */
-      --green:        #16a34a;
+      /* Semantic — each clears 4.5:1 on white and on its own tint,
+         because these carry money figures, not decoration. */
+      --green:        #15803d;
       --green-bg:     #dcfce7;
       --red:          #dc2626;
       --red-bg:       #fee2e2;
-      --amber:        #d97706;
+      --amber:        #b45309;
       --amber-bg:     #fef3c7;
+
+      /* Spacing — 4px grid */
+      --s-1: .25rem; --s-2: .5rem;  --s-3: .75rem; --s-4: 1rem;
+      --s-5: 1.25rem; --s-6: 1.5rem; --s-8: 2rem;  --s-10: 2.5rem;
 
       /* Radius & shadow */
       --radius:       12px;
@@ -47,19 +60,49 @@
       --shadow-md:    0 4px 8px rgba(15,23,42,.04), 0 2px 4px rgba(15,23,42,.06);
       --shadow-lg:    0 10px 24px rgba(15,23,42,.08), 0 4px 8px rgba(15,23,42,.05);
 
+      /* Focus — one ring, used everywhere, 4.7:1+ on every surface */
+      --focus:        #2563eb;
+      --focus-ring:   0 0 0 2px var(--surface), 0 0 0 4px var(--focus);
+
       /* Type */
       --font-display: 'IBM Plex Sans', system-ui, -apple-system, sans-serif;
       --font-body:    'Inter', system-ui, -apple-system, sans-serif;
       --font-mono:    'JetBrains Mono', 'SF Mono', 'Fira Code', monospace;
+
+      /* Minimum interactive box — WCAG 2.2 SC 2.5.8 (AA) */
+      --tap: 24px;
     }
+    html { -webkit-text-size-adjust: 100%; }
     body {
       font-family: var(--font-body);
-      font-size: 14.5px; line-height: 1.6;
+      font-size: 15px; line-height: 1.6;
       background: var(--bg); color: var(--text);
       -webkit-font-smoothing: antialiased;
     }
     a { color: var(--accent); text-decoration: none; }
     a:hover { text-decoration: underline; }
+
+    /* ── Focus: one visible ring on every interactive thing ───
+       Pointer users never see it; keyboard users always do. */
+    :focus-visible {
+      outline: 2px solid var(--focus);
+      outline-offset: 2px;
+      border-radius: var(--radius-xs);
+    }
+    /* Kill the ring only where we replace it with our own. */
+    .fi-input:focus-visible, .ask-box input:focus-visible { outline: none; }
+
+    /* ── Skip link ───────────────────────────────────────── */
+    .skip-link {
+      position: absolute; left: var(--s-2); top: var(--s-2);
+      z-index: 200; transform: translateY(-200%);
+      background: var(--surface); color: var(--accent-hover);
+      border: 1px solid var(--accent); border-radius: var(--radius-sm);
+      padding: .55rem 1rem; font-size: .875rem; font-weight: 600;
+      box-shadow: var(--shadow-lg);
+      transition: transform .15s;
+    }
+    .skip-link:focus { transform: translateY(0); text-decoration: none; }
 
     /* ── Nav ─────────────────────────────────────────────── */
     .topnav {
@@ -72,7 +115,7 @@
     .topnav-inner {
       max-width: 1380px; margin: 0 auto;
       display: flex; align-items: center; gap: 1.5rem;
-      padding: 0 2rem; height: 56px;
+      padding: 0 2rem; min-height: 56px;
     }
     .nav-logo {
       display: flex; align-items: center; gap: 10px;
@@ -93,44 +136,84 @@
     .nav-logo-text { display: flex; flex-direction: column; gap: 0; }
     .nav-logo-name { font-family: var(--font-display); font-size: .9375rem; font-weight: 700; letter-spacing: -.02em; line-height: 1.1; }
     .nav-logo-sub  { font-size: .565rem; font-weight: 500; color: var(--text-3); letter-spacing: .08em; text-transform: uppercase; line-height: 1; }
-    .nav-divider { width: 1px; height: 22px; background: var(--border); }
+    .nav-divider { width: 1px; height: 22px; background: var(--border); flex-shrink: 0; }
     .nav-links { display: flex; align-items: center; gap: 2px; }
-    .nav-links a {
+    .nav-links a, .nav-links .nav-current {
+      display: inline-flex; align-items: center;
+      min-height: var(--tap);
       padding: .375rem .8rem; border-radius: var(--radius-xs);
       font-size: .8125rem; font-weight: 500; color: var(--text-2);
       transition: background .15s, color .15s; white-space: nowrap;
     }
     .nav-links a:hover { background: var(--surface-2); color: var(--text); text-decoration: none; }
-    .nav-links a.active {
-      background: var(--accent-bg); color: var(--accent);
-      font-weight: 600;
+    /* Active = the section you are in, including its sub-pages. The
+       left border is the redundant, non-colour cue. */
+    .nav-links a.active, .nav-links .nav-current {
+      background: var(--accent-bg); color: var(--accent-hover);
+      font-weight: 600; box-shadow: inset 2px 0 0 var(--accent);
     }
     .nav-spacer { flex: 1; }
     .nav-pill {
       display: inline-flex; align-items: center; gap: 6px;
+      min-height: var(--tap);
       padding: .3rem .75rem; border-radius: 20px;
       background: var(--surface-2); border: 1px solid var(--border);
       font-size: .75rem; font-weight: 500; color: var(--text-2);
     }
     .nav-pill .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--green); box-shadow: 0 0 0 2px #d1fae5; }
     .nav-btn-danger {
+      display: inline-flex; align-items: center; min-height: var(--tap);
       padding: .3rem .75rem; border-radius: var(--radius-xs);
       font-size: .75rem; font-weight: 600;
-      color: var(--red); background: var(--red-bg);
+      color: #991b1b; background: var(--red-bg);
       border: 1px solid #fecaca; transition: background .15s;
-      text-decoration: none;
+      text-decoration: none; white-space: nowrap;
     }
     .nav-btn-danger:hover { background: #fecaca; text-decoration: none; }
 
+    /* Below 1040px the link strip scrolls instead of wrapping the bar
+       into two rows or pushing the account controls off-screen. */
+    @media (max-width: 1040px) {
+      .topnav-inner { gap: .875rem; }
+      .nav-links {
+        overflow-x: auto; scrollbar-width: none;
+        -webkit-overflow-scrolling: touch;
+        scroll-snap-type: x proximity;
+      }
+      .nav-links::-webkit-scrollbar { display: none; }
+      .nav-links a { scroll-snap-align: start; }
+      .nav-logo-text { display: none; }
+    }
+    @media (max-width: 760px) {
+      .nav-email { display: none; }
+      .nav-divider { display: none; }
+    }
+
     /* ── Page wrapper ─────────────────────────────────────── */
     .page { max-width: 1380px; margin: 0 auto; padding: 2rem; }
+
+    /* ── Breadcrumbs ─────────────────────────────────────── */
+    .crumbs {
+      display: flex; align-items: center; flex-wrap: wrap;
+      gap: .35rem; margin-bottom: .875rem;
+      font-size: .8125rem; color: var(--text-3);
+    }
+    .crumbs a {
+      display: inline-flex; align-items: center; min-height: var(--tap);
+      padding: 0 .3rem; margin: 0 -.3rem;
+      border-radius: var(--radius-xs); color: var(--text-3); font-weight: 500;
+    }
+    .crumbs a:hover { color: var(--accent-hover); text-decoration: underline; }
+    .crumbs .sep { color: var(--text-4); user-select: none; }
+    .crumbs [aria-current="page"] { color: var(--text); font-weight: 600; }
 
     /* ── Page header ─────────────────────────────────────── */
     .page-header { margin-bottom: 1.875rem; }
     .page-header h2 {
       font-family: var(--font-display);
       font-size: 1.4375rem; font-weight: 700; color: var(--text);
-      display: flex; align-items: baseline; gap: .6rem; letter-spacing: -.02em;
+      display: flex; align-items: baseline; gap: .6rem; flex-wrap: wrap;
+      letter-spacing: -.02em;
     }
     .page-header h2 .subtitle {
       font-family: var(--font-body);
@@ -145,7 +228,6 @@
       box-shadow: var(--shadow);
       transition: box-shadow .2s, border-color .2s;
     }
-    .card:hover { box-shadow: var(--shadow-md); }
     .card-label {
       font-size: .6875rem; font-weight: 600;
       text-transform: uppercase; letter-spacing: .09em;
@@ -163,6 +245,10 @@
       text-transform: uppercase; letter-spacing: .09em;
       color: var(--text-3); margin-bottom: .9rem;
     }
+    /* Hover lift only where hovering is a real thing. */
+    @media (hover: hover) {
+      .card:hover { box-shadow: var(--shadow-md); }
+    }
 
     /* ── Grid ────────────────────────────────────────────── */
     .grid { display: grid; gap: 1.125rem; }
@@ -177,6 +263,7 @@
       .grid-2, .grid-3, .grid-4 { grid-template-columns: 1fr; }
       .page { padding: 1rem; }
       .topnav-inner { padding: 0 1rem; }
+      .card { padding: 1.125rem; }
     }
 
     /* ── Tables ──────────────────────────────────────────── */
@@ -193,7 +280,9 @@
       color: var(--text-2); vertical-align: middle;
     }
     tbody tr:last-child td { border-bottom: none; }
-    tbody tr:hover td { background: var(--surface-2); }
+    @media (hover: hover) {
+      tbody tr:hover td { background: var(--surface-2); }
+    }
     tfoot th {
       padding: .65rem 1rem; font-size: .8rem; font-weight: 600;
       color: var(--text); border-top: 2px solid var(--border);
@@ -204,15 +293,38 @@
       font-variant-numeric: tabular-nums;
       text-align: right;
     }
+    /* Money columns line up on the decimal even when the glyphs differ. */
+    .text-right { text-align: right; font-variant-numeric: tabular-nums; }
+
+    /* Wide tables scroll inside their card rather than stretching the
+       page sideways. `enhance.js` below adds the keyboard affordance. */
+    .card:has(> table), .card:has(> .table-scroll), .table-scroll { overflow-x: auto; }
+    details:has(> table) { overflow-x: auto; }
+    .is-scrollable:focus-visible { outline: 2px solid var(--focus); outline-offset: -2px; }
 
     /* ── Headings ────────────────────────────────────────── */
     h1, h2, h3, h4 { font-family: var(--font-display); letter-spacing: -.02em; }
     h2 { font-size: 1.375rem; font-weight: 700; }
     h3 { font-size: 1.0625rem; font-weight: 600; }
 
+    /* ── Form controls ───────────────────────────────────── */
+    input, select, textarea, button { font-family: inherit; font-size: inherit; }
+    input[type="date"], input[type="text"], input[type="email"],
+    input[type="password"], input[type="search"], select, textarea {
+      min-height: var(--tap);
+      border: 1px solid var(--border); border-radius: var(--radius-xs);
+      background: var(--surface); color: var(--text);
+      padding: .35rem .6rem;
+    }
+    /* iOS zooms the viewport on focus for anything under 16px. */
+    @media (max-width: 760px) {
+      input, select, textarea { font-size: 16px; }
+    }
+
     /* ── Buttons ─────────────────────────────────────────── */
     .btn {
       display: inline-flex; align-items: center; justify-content: center;
+      min-height: 36px;
       padding: .5rem 1.125rem; border-radius: var(--radius-sm);
       font-family: var(--font-body);
       font-size: .875rem; font-weight: 600; line-height: 1.4;
@@ -221,6 +333,9 @@
       text-decoration: none; gap: .4rem; letter-spacing: -.005em;
     }
     .btn:active { transform: scale(.98); }
+    .btn[disabled], .btn[aria-disabled="true"] {
+      opacity: .55; cursor: not-allowed; pointer-events: none;
+    }
     .btn-primary {
       background: var(--accent);
       color: #fff;
@@ -240,6 +355,25 @@
       background: transparent; color: var(--text-2); border: none;
     }
     .btn-ghost:hover { background: var(--surface-2); text-decoration: none; }
+    .btn-sm { min-height: var(--tap); padding: .25rem .65rem; font-size: .75rem; }
+
+    /* ── Segmented control (date presets) ────────────────── */
+    .seg { display: inline-flex; gap: .25rem; }
+    .seg-btn {
+      display: inline-flex; align-items: center; justify-content: center;
+      min-height: var(--tap); padding: .3rem .7rem;
+      border-radius: var(--radius-xs); border: 1px solid var(--border);
+      background: var(--surface); color: var(--text-2);
+      font-size: .75rem; font-weight: 500; cursor: pointer;
+      transition: background .15s, color .15s, border-color .15s;
+    }
+    .seg-btn:hover { background: var(--surface-2); color: var(--text); }
+    /* The selected range is stated, not just tinted — aria-pressed is
+       what a screen reader announces and what the styling follows. */
+    .seg-btn[aria-pressed="true"] {
+      background: var(--accent-bg); border-color: var(--accent-tint);
+      color: var(--accent-hover); font-weight: 600;
+    }
 
     /* ── Badges / Pills ──────────────────────────────────── */
     .pill {
@@ -263,19 +397,33 @@
     .alert-warning { background: var(--amber-bg);  color: #92400e; border: 1px solid #fde68a; }
     .alert-info    { background: var(--accent-bg); color: var(--accent-hover); border: 1px solid var(--accent-tint); }
     .alert-success { background: var(--green-bg);  color: #14532d; border: 1px solid #bbf7d0; }
+    /* The glyph repeats the colour meaning for anyone who cannot use it. */
+    .alert-icon { flex-shrink: 0; font-size: .95rem; line-height: 1; }
+    .alert-body { flex: 1; min-width: 0; }
+    .alert-next { display: block; margin-top: .2rem; font-weight: 400; opacity: .85; }
+
+    /* ── Empty states ────────────────────────────────────── */
+    .empty {
+      text-align: center; padding: 2.5rem 1.5rem;
+      color: var(--text-3); font-size: .875rem;
+    }
+    .empty h3 { font-size: 1rem; color: var(--text); margin-bottom: .35rem; }
+    .empty p { max-width: 42ch; margin: 0 auto .875rem; line-height: 1.6; }
 
     /* ── Details / Summary ───────────────────────────────── */
     details {
       border: 1px solid var(--border); border-radius: var(--radius-sm);
       overflow: hidden; margin-top: .625rem;
+      scroll-margin-top: 72px;
     }
     details summary {
       display: flex; align-items: center; gap: .75rem;
       padding: .8rem 1.25rem; background: var(--surface-2);
       cursor: pointer; user-select: none; font-size: .8125rem;
-      list-style: none;
+      list-style: none; min-height: 40px;
     }
     details summary::-webkit-details-marker { display: none; }
+    details summary:focus-visible { outline: 2px solid var(--focus); outline-offset: -2px; }
     details summary .arrow {
       font-size: .6rem; color: var(--text-3);
       transition: transform .2s; flex-shrink: 0;
@@ -283,6 +431,9 @@
     details[open] .arrow { transform: rotate(90deg); }
     details[open] { border-color: var(--accent-tint); }
     details[open] summary { background: var(--accent-bg); color: var(--accent-hover); }
+    /* Jumping to a category from the summary table lands on a section
+       that is open and outlined, so the jump is visibly where you asked. */
+    details:target { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-glow); }
     details table td, details table th { padding: .55rem 1.25rem; }
 
     /* ── Progress bar ────────────────────────────────────── */
@@ -295,7 +446,6 @@
     .text-green { color: var(--green); }
     .text-red   { color: var(--red); }
     .text-muted { color: var(--text-3); }
-    .text-right { text-align: right; }
     .fw-500     { font-weight: 500; }
     .fw-600     { font-weight: 600; }
     .fw-700     { font-weight: 700; }
@@ -303,14 +453,45 @@
     .mb-1       { margin-bottom: 1rem; }
     .mb-15      { margin-bottom: 1.5rem; }
     .mt-1       { margin-top: 1rem; }
+    .visually-hidden {
+      position: absolute; width: 1px; height: 1px;
+      padding: 0; margin: -1px; overflow: hidden;
+      clip: rect(0 0 0 0); white-space: nowrap; border: 0;
+    }
+
+    /* ── User preferences ────────────────────────────────── */
+    @media (prefers-reduced-motion: reduce) {
+      *, *::before, *::after {
+        animation-duration: .001ms !important;
+        animation-iteration-count: 1 !important;
+        transition-duration: .001ms !important;
+        scroll-behavior: auto !important;
+      }
+    }
+    @media (prefers-contrast: more) {
+      :root {
+        --text-2: #1e293b; --text-3: #334155; --text-4: #475569;
+        --border: #94a3b8; --border-light: #cbd5e1;
+        --accent: #1d4ed8; --green: #14532d; --red: #991b1b; --amber: #78350f;
+      }
+      .card, .nav-pill, .seg-btn { border-width: 1px; }
+      :focus-visible { outline-width: 3px; }
+    }
+    @media print {
+      .topnav, .skip-link, .seg, .crumbs { display: none !important; }
+      .page { max-width: none; padding: 0; }
+      .card { box-shadow: none; break-inside: avoid; }
+    }
   </style>
 </head>
 <body>
 
-<nav class="topnav">
+<a class="skip-link" href="#main">Skip to main content</a>
+
+<nav class="topnav" aria-label="Primary">
   <div class="topnav-inner">
     <a class="nav-logo" href="{{ product_url if ops_view else url_for('index') }}">
-      <div class="nav-logo-icon">FN</div>
+      <div class="nav-logo-icon" aria-hidden="true">FN</div>
       <div class="nav-logo-text">
         <div class="nav-logo-name">FintNet</div>
         <div class="nav-logo-sub">{% if ops_view %}Operations{% else %}Bank Integrations{% endif %}</div>
@@ -318,50 +499,97 @@
     </a>
     {% if current_user.is_authenticated and not ops_view %}
     <div class="nav-divider"></div>
+    {# `nav_section` lets a sub-page (an account's balances, say) light up
+       the section it belongs to. Pages that don't set it fall back to
+       their own endpoint name, which is the common case. #}
+    {% set here = nav_section | default(request.endpoint) %}
     <div class="nav-links">
-      <a href="{{ url_for('dashboard') }}" {% if request.endpoint == 'dashboard' %}class="active"{% endif %}>Dashboard</a>
-      <a href="{{ url_for('aggregation') }}" {% if request.endpoint == 'aggregation' %}class="active"{% endif %}>Balances</a>
-      <a href="{{ url_for('spending') }}" {% if request.endpoint == 'spending' %}class="active"{% endif %}>Spending</a>
-      <a href="{{ url_for('recurring') }}" {% if request.endpoint == 'recurring' %}class="active"{% endif %}>Recurring</a>
-      <a href="{{ url_for('ask') }}" {% if request.endpoint == 'ask' %}class="active"{% endif %}>Ask</a>
-      {% if current_user.role == 'tpp_admin' %}<a href="{{ url_for('ops') }}" {% if request.endpoint == 'ops' %}class="active"{% endif %}>Ops</a>{% endif %}
-      <a href="{{ url_for('index') }}" {% if request.endpoint == 'index' %}class="active"{% endif %}>Connect</a>
+      <a href="{{ url_for('dashboard') }}" {% if here == 'dashboard' %}class="active" aria-current="page"{% endif %}>Dashboard</a>
+      <a href="{{ url_for('aggregation') }}" {% if here == 'aggregation' %}class="active" aria-current="page"{% endif %}>My money</a>
+      <a href="{{ url_for('spending') }}" {% if here == 'spending' %}class="active" aria-current="page"{% endif %}>Spending</a>
+      <a href="{{ url_for('recurring') }}" {% if here == 'recurring' %}class="active" aria-current="page"{% endif %}>Recurring</a>
+      <a href="{{ url_for('ask') }}" {% if here == 'ask' %}class="active" aria-current="page"{% endif %}>Ask</a>
+      {% if current_user.role == 'tpp_admin' %}<a href="{{ url_for('ops') }}" {% if here == 'ops' %}class="active" aria-current="page"{% endif %}>Ops</a>{% endif %}
+      <a href="{{ url_for('index') }}" {% if here == 'index' %}class="active" aria-current="page"{% endif %}>Banks</a>
     </div>
     {% elif ops_view %}
     <div class="nav-divider"></div>
     <div class="nav-links">
-      <span class="active">Operations</span>
-      <a href="{{ product_url }}">Product ↗</a>
+      <span class="nav-current" aria-current="page">Operations</span>
+      <a href="{{ product_url }}">Product <span aria-hidden="true">↗</span></a>
     </div>
     {% endif %}
     <div class="nav-spacer"></div>
     {% if current_user.is_authenticated %}
-      {% if session.bank %}
-      <div class="nav-pill">
-        <span class="dot"></span>
-        {{ session.bank | bank_name }}
-      </div>
-      <a class="nav-btn-danger" href="{{ url_for('disconnect') }}">Disconnect</a>
-      {% endif %}
-      <div class="nav-pill" style="max-width:200px">
+      <div class="nav-pill nav-email" style="max-width:200px">
         <span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ current_user.email }}</span>
       </div>
-      <a class="nav-btn-danger" href="{{ url_for('logout') }}">Logout</a>
+      <a class="nav-btn-danger" href="{{ url_for('logout') }}">Log out</a>
     {% endif %}
   </div>
 </nav>
 
-<div class="page">
+<main class="page" id="main">
+  {# Flashes are the app's answer to "what just happened?", so they are
+     announced, not just drawn. Errors interrupt; confirmations wait. #}
   {% with messages = get_flashed_messages(with_categories=true) %}
-    {% for category, message in messages %}
-    <div class="alert alert-{% if category == 'error' %}error{% elif category == 'warning' %}warning{% else %}success{% endif %}">
-      {{ message }}
+    {% if messages %}
+    <div class="flash-region">
+      {% for category, message in messages %}
+      {% set kind = 'error' if category == 'error' else ('warning' if category == 'warning' else ('info' if category == 'info' else 'success')) %}
+      <div class="alert alert-{{ kind }}"
+           role="{{ 'alert' if kind == 'error' else 'status' }}"
+           {% if kind != 'error' %}aria-live="polite"{% endif %}>
+        <span class="alert-icon" aria-hidden="true">{% if kind == 'error' %}✕{% elif kind == 'warning' %}!{% elif kind == 'info' %}i{% else %}✓{% endif %}</span>
+        <span class="alert-body">
+          <span class="visually-hidden">{{ kind | capitalize }}:</span>{{ message }}
+        </span>
+      </div>
+      {% endfor %}
     </div>
-    {% endfor %}
+    {% endif %}
   {% endwith %}
 
   {% block content %}{% endblock %}
-</div>
+</main>
+
+<script>
+  // Progressive enhancement only — every page works without this file.
+  (function () {
+    // 1. A table that overflows its card is a scroll region, and a scroll
+    //    region has to be reachable and nameable from the keyboard.
+    //    WCAG 2.2 wants tabindex + a role + an accessible name.
+    function markScrollers() {
+      document.querySelectorAll('.card, .table-scroll, details').forEach(function (el) {
+        var overflows = el.scrollWidth > el.clientWidth + 1;
+        if (!overflows) {
+          el.removeAttribute('tabindex');
+          el.classList.remove('is-scrollable');
+          return;
+        }
+        if (el.classList.contains('is-scrollable')) return;
+        var title = el.querySelector('.card-section-title, summary, caption');
+        el.setAttribute('tabindex', '0');
+        el.setAttribute('role', 'region');
+        var name = title ? title.textContent.replace(/\s+/g, ' ').trim() : 'Table';
+        el.setAttribute('aria-label', name + ' — scrollable');
+        el.classList.add('is-scrollable');
+      });
+    }
+    markScrollers();
+    addEventListener('resize', markScrollers, { passive: true });
+
+    // 2. Jumping to #cat-groceries should open that section, not scroll to
+    //    a closed strip. Runs on load and on every in-page hash change.
+    function openTarget() {
+      if (!location.hash) return;
+      var el = document.querySelector(location.hash);
+      if (el && el.tagName === 'DETAILS') el.open = true;
+    }
+    openTarget();
+    addEventListener('hashchange', openTarget);
+  })();
+</script>
 
 </body>
 </html>

@@ -1,22 +1,43 @@
 {% extends "base.html" %}
+{% block title %}Connect ING · FintNet{% endblock %}
+{% set nav_section = 'index' %}
 {% block content %}
-<h2>ING — Authorize Access</h2>
 
-<p>After logging in on ING's sandbox, you will be redirected to <code>https://www.example.com/</code>. The URL will contain a <code>code</code> parameter — copy it and paste below.</p>
+<nav class="crumbs" aria-label="Breadcrumb">
+  <a href="{{ url_for('index') }}">Your banks</a>
+  <span class="sep" aria-hidden="true">/</span>
+  <span>ING</span>
+  <span class="sep" aria-hidden="true">/</span>
+  <span aria-current="page">Authorise access</span>
+</nav>
 
-<p>Example redirect URL:</p>
-<pre style="background:var(--surface-2);padding:.75rem;border-radius:6px;font-size:.8rem;overflow-x:auto">https://www.example.com/?state=...&amp;code=<strong>PASTE-THIS-PART</strong></pre>
+<div class="card" style="max-width:620px;margin:1rem auto">
+  <div class="card-label">Step 2 of 2</div>
+  <h2 style="margin-bottom:.5rem">Paste the code ING gave you</h2>
 
-{% with messages = get_flashed_messages(with_categories=true) %}
-  {% for cat, msg in messages %}
-    <p style="color:{% if cat == 'error' %}red{% else %}green{% endif %}">{{ msg }}</p>
-  {% endfor %}
-{% endwith %}
+  <p style="color:var(--text-2);font-size:.9rem;line-height:1.65">
+    After you sign in at ING, its sandbox sends you to <code>example.com</code> instead of back
+    here. The address bar will carry a <code>code</code> value. Copy it and paste it below.
+  </p>
 
-<form method="post" action="{{ url_for('ing_enter_code') }}">
-  <label for="code" style="display:block;margin-bottom:.5rem;font-weight:600">Authorization Code</label>
-  <input type="text" id="code" name="code" placeholder="Paste the code from the URL here"
-         required style="width:100%;padding:.5rem;font-size:.9rem;border:1px solid var(--border);border-radius:4px">
-  <button type="submit" style="margin-top:1rem">Connect ING →</button>
-</form>
+  <p class="card-meta" style="margin-top:1rem;margin-bottom:.35rem">The address will look like this:</p>
+  <pre style="background:var(--surface-2);border:1px solid var(--border);padding:.75rem;border-radius:var(--radius-xs);font-family:var(--font-mono);font-size:.75rem;overflow-x:auto">https://www.example.com/?state=…&amp;code=<strong>copy-this-part</strong></pre>
+
+  <form method="post" action="{{ url_for('ing_enter_code') }}" style="margin-top:1.25rem">
+    <label for="code" style="display:block;margin-bottom:.4rem;font-weight:600;font-size:.8125rem">
+      Authorisation code
+    </label>
+    <input type="text" id="code" name="code" required autocomplete="off" autofocus
+           aria-describedby="code-hint"
+           placeholder="Paste the code, or the whole address"
+           style="width:100%;padding:.65rem .8rem;font-size:.9rem">
+    <p id="code-hint" class="card-meta" style="margin-top:.4rem">
+      Either works. We will pull the code out of a full address for you.
+    </p>
+    <div style="display:flex;gap:.625rem;flex-wrap:wrap;margin-top:1.25rem">
+      <button type="submit" class="btn btn-primary">Connect ING</button>
+      <a class="btn btn-secondary" href="{{ url_for('index') }}">Cancel</a>
+    </div>
+  </form>
+</div>
 {% endblock %}

@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% block title %}Spending · FintNet{% endblock %}
 {% block content %}
 
 <div class="page-header" style="display:flex;align-items:flex-start;justify-content:space-between;flex-wrap:wrap;gap:1rem">
@@ -8,20 +9,18 @@
   </div>
   <form id="ff" method="GET" action="{{ url_for('spending') }}"
     style="display:flex;align-items:center;gap:.4rem;flex-wrap:wrap">
-    <div style="display:flex;gap:.25rem">
+    <div class="seg" role="group" aria-label="Date range">
       {% for label, d in [('1M',30),('3M',90),('6M',180),('All',0)] %}
-      <button type="button" onclick="setPreset('{{ label }}',{{ d }})"
-        style="padding:.3rem .6rem;border-radius:6px;border:1px solid var(--border);
-          background:var(--surface);font-size:.75rem;cursor:pointer;color:var(--text-2)">{{ label }}</button>
+      <button type="button" class="seg-btn" data-preset="{{ label }}" data-days="{{ d }}"
+              aria-pressed="false" onclick="setPreset('{{ label }}',{{ d }})">{{ label }}</button>
       {% endfor %}
     </div>
-    <input type="date" id="df" name="from" value="{{ date_from }}"
+    <input type="date" id="df" name="from" value="{{ date_from }}" aria-label="Show from date"
       style="padding:.3rem .6rem;border:1px solid var(--border);border-radius:6px;font-size:.8rem;font-family:inherit">
     <span style="color:var(--text-3);font-size:.8rem">→</span>
-    <input type="date" id="dt" name="to" value="{{ date_to }}"
+    <input type="date" id="dt" name="to" value="{{ date_to }}" aria-label="Show until date"
       style="padding:.3rem .6rem;border:1px solid var(--border);border-radius:6px;font-size:.8rem;font-family:inherit">
-    <button type="submit" style="padding:.3rem .75rem;background:var(--accent);color:#fff;
-      border:none;border-radius:6px;font-size:.8rem;cursor:pointer">Apply</button>
+    <button type="submit" class="btn btn-primary btn-sm">Apply</button>
   </form>
 </div>
 
@@ -40,7 +39,7 @@
         <th>Category</th>
         {% for b in all_banks %}
         <th class="text-right">
-          <span class="pill" style="background:{{ bank_colors.get(b,'#95a5a6') }}18;color:{{ bank_colors.get(b,'#95a5a6') }};border:1px solid {{ bank_colors.get(b,'#95a5a6') }}33">
+          <span class="pill" style="background:{{ bank_colors.get(b,'#95a5a6') }}18;color:{{ b | bank_ink }};border:1px solid {{ bank_colors.get(b,'#95a5a6') }}33">
             <span class="dot" style="background:{{ bank_colors.get(b,'#95a5a6') }}"></span>{{ b | bank_name }}
           </span>
         </th>
@@ -96,7 +95,7 @@
     <span class="text-muted" style="font-size:.75rem;margin-left:.25rem">({{ by_category[category] | length }})</span>
     <span style="margin-left:auto;display:flex;gap:.3rem;flex-wrap:wrap">
       {% for b, amt in cat_bank_rows[category] if amt > 0 %}
-      <span class="pill" style="background:{{ bank_colors.get(b,'#95a5a6') }}18;color:{{ bank_colors.get(b,'#95a5a6') }};border:1px solid {{ bank_colors.get(b,'#95a5a6') }}33">
+      <span class="pill" style="background:{{ bank_colors.get(b,'#95a5a6') }}18;color:{{ b | bank_ink }};border:1px solid {{ bank_colors.get(b,'#95a5a6') }}33">
         <span class="dot" style="background:{{ bank_colors.get(b,'#95a5a6') }}"></span>{{ b | bank_name }} {{ "%.0f" | format(amt) }}€
       </span>{% endfor %}
     </span>
@@ -107,7 +106,7 @@
       {% for txn, acc in by_category[category] %}
       <tr>
         <td class="mono text-muted">{{ txn.booking_date or "—" }}</td>
-        <td><span class="pill" style="background:{{ bank_colors.get(acc.bank,'#95a5a6') }}18;color:{{ bank_colors.get(acc.bank,'#95a5a6') }};border:1px solid {{ bank_colors.get(acc.bank,'#95a5a6') }}33">
+        <td><span class="pill" style="background:{{ bank_colors.get(acc.bank,'#95a5a6') }}18;color:{{ acc.bank | bank_ink }};border:1px solid {{ bank_colors.get(acc.bank,'#95a5a6') }}33">
           <span class="dot" style="background:{{ bank_colors.get(acc.bank,'#95a5a6') }}"></span>{{ acc.bank | upper }}
         </span></td>
         <td class="mono text-muted" style="font-size:.75rem">{{ acc.iban }}</td>
@@ -130,14 +129,27 @@ new Chart(document.getElementById('groupedChart'), {
 });
 
 const today = new Date().toISOString().split('T')[0];
-function setPreset(label, days) {
+function presetRange(label, days) {
   const now = new Date();
-  let from;
-  if (label === 'All') { from = new Date('2025-01-01'); }
-  else { from = new Date(now); from.setDate(from.getDate() - days + 1); }
-  document.getElementById('df').value = from.toISOString().split('T')[0];
-  document.getElementById('dt').value = today;
+  const from = (label === 'All') ? new Date('2025-01-01')
+             : (() => { const f = new Date(now); f.setDate(f.getDate() - days + 1); return f; })();
+  return [from.toISOString().split('T')[0], today];
+}
+function setPreset(label, days) {
+  const [from, to] = presetRange(label, days);
+  document.getElementById('df').value = from;
+  document.getElementById('dt').value = to;
   document.getElementById('ff').submit();
 }
+// Light up whichever preset matches the dates currently in the form, so the
+// page says which range you are looking at instead of leaving all four equal.
+function markActivePreset() {
+  var from = document.getElementById('df').value;
+  var to   = document.getElementById('dt').value;
+  document.querySelectorAll('.seg-btn').forEach(function (b) {
+    b.setAttribute('aria-pressed', String(presetRange(b.dataset.preset, +b.dataset.days)[0] === from && to === today));
+  });
+}
+markActivePreset();
 </script>
 {% endblock %}

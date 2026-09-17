@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% block title %}Your banks · FintNet{% endblock %}
 {% block content %}
 <style>
   /* ── Hero animations ────── */
@@ -167,7 +168,7 @@
       {% if s.type == 'redundant' %}
       <div style="display:flex;flex-wrap:wrap;gap:.375rem;margin-top:.5rem">
         {% for svc in s.services %}
-        <span class="pill" style="background:#fff7ed;color:#c2410c;border:1px solid #fed7aa">
+        <span class="pill" style="background:#fff7ed;color:#9a3412;border:1px solid #fed7aa">
           {{ svc.merchant }} · {{ svc.fmt }}/mo
         </span>
         {% endfor %}

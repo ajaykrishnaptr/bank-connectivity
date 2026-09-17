@@ -80,6 +80,22 @@ BANK_COLORS = {
     "synthbank":    "#6d28d9",
 }
 
+# The same identity, dark enough to read as text.
+#
+# BANK_COLORS above are the banks' own brand colours, which is what a
+# chart bar or a status dot should be. Several of them land near 3:1 on
+# white, so the moment the bank's *name* is set in that colour on a pale
+# tint of itself, the label stops being readable — Commerzbank's orange
+# measured 2.60:1 against its own pill. These are the same hues pushed
+# dark enough to clear 4.5:1 on that tint, and they are for text only.
+BANK_INK = {
+    "commerzbank":  "#a1560f",
+    "nordea":       "#1c5f8a",
+    "unicredit":    "#c0392b",
+    "ing":          "#a83f00",
+    "synthbank":    "#6d28d9",
+}
+
 # Display names for the storage ids above; "ing".capitalize() would give "Ing".
 BANK_NAMES = {
     "commerzbank": "Commerzbank",
@@ -594,13 +610,16 @@ def _split_product_and_ops():
 
 app.jinja_env.filters["money"] = _money
 app.jinja_env.filters["bank_name"] = _bank_name
+app.jinja_env.filters["bank_ink"] = lambda bank: BANK_INK.get(
+    (bank or "").replace(synthbank_store.GEN_PREFIX, ""), "#5d6b7d")
 app.jinja_env.tests["generated"] = lambda account: bool(account and (account.resource_id or "").startswith("SB-"))
 
 
 @app.context_processor
 def inject_flags():
     return {"is_hosted": IS_HOSTED, "assistant_enabled": llm.available(),
-            "ops_view": _on_ops_host(), "product_url": PRODUCT_URL}
+            "ops_view": _on_ops_host(), "product_url": PRODUCT_URL,
+            "bank_colors": BANK_COLORS}
 
 
 app.register_blueprint(cron.bp)
@@ -706,6 +725,23 @@ def _live_blocked(bank: str) -> bool:
     live flow only at its home bank. Other banks go through /connect/<bank>."""
     cust = _demo_customer()
     return cust is not None and synthbank_store.home_bank(cust.customer_id) != bank
+
+
+def _connect_summary(bank: str) -> str:
+    """What actually arrived, for the message shown after a connect.
+
+    "Accounts fetched" left people on a dashboard with no way to tell a
+    successful sync from an empty one. Counting the rows we just wrote
+    says which of the two happened.
+    """
+    accounts = Account.query.filter_by(user_id=current_user.id, bank=bank).all()
+    if not accounts:
+        return "No accounts came back yet. The bank may still be preparing them."
+    ids = [a.id for a in accounts]
+    txns = Transaction.query.filter(Transaction.account_id.in_(ids)).count()
+    n = len(accounts)
+    return (f"{n} account{'' if n == 1 else 's'} and "
+            f"{txns} transaction{'' if txns == 1 else 's'} are now in your dashboard.")
 
 
 def _upsert_connection(bank: str, access_token: str | None = None,
@@ -1372,10 +1408,11 @@ def callback():
         status = auth.check_and_store_consent_status()
         if status == "valid":
             _upsert_connection("unicredit", consent_id=session.pop("consent_id", None))
-            flash("UniCredit connected. Accounts fetched.", "success")
+            flash(f"UniCredit connected. {_connect_summary('unicredit')}", "success")
             return redirect(url_for("dashboard"))
         flash(f"Consent not yet valid (status: {status}). Complete SCA and try again.", "warning")
-        return render_template("consent_pending.html", status=status)
+        return render_template("consent_pending.html", status=status, bank="unicredit",
+                               recheck_url=url_for("callback"))
     except psd2_client.PSD2ApiError as e:
         flash(str(e), "error")
         return redirect(url_for("index"))
@@ -1416,9 +1453,10 @@ def commerzbank_authorize():
         status = commerzbank_client.get_consent_status(token, consent_id)
         if status != "valid":
             flash(f"Consent not valid (status: {status}).", "warning")
-            return render_template("consent_pending.html", status=status)
+            return render_template("consent_pending.html", status=status, bank="commerzbank",
+                                   recheck_url=url_for("commerzbank_connect"))
         _upsert_connection("commerzbank", consent_id=consent_id)
-        flash("Commerzbank connected. Accounts fetched.", "success")
+        flash(f"Commerzbank connected. {_connect_summary('commerzbank')}", "success")
         return redirect(url_for("dashboard"))
     except commerzbank_client.CommerzbankApiError as e:
         flash(str(e), "error")
@@ -1460,7 +1498,7 @@ def nordea_authorize():
         if "code" in params:
             token = nordea_client.exchange_code(params["code"][0], redirect_uri)
             _upsert_connection("nordea", access_token=token)
-            flash("Nordea connected. Accounts fetched.", "success")
+            flash(f"Nordea connected. {_connect_summary('nordea')}", "success")
             return redirect(url_for("dashboard"))
         return redirect(location)
     except nordea_client.NordeaApiError as e:
@@ -1485,7 +1523,7 @@ def nordea_callback():
         token = nordea_client.exchange_code(code, redirect_uri)
         session.pop("nordea_state", None)
         _upsert_connection("nordea", access_token=token)
-        flash("Nordea connected. Accounts fetched.", "success")
+        flash(f"Nordea connected. {_connect_summary('nordea')}", "success")
         return redirect(url_for("dashboard"))
     except nordea_client.NordeaApiError as e:
         flash(str(e), "error")
@@ -1538,7 +1576,7 @@ def ing_enter_code():
             customer_token = ing_client.exchange_code(code)
             session.pop("ing_state", None)
             _upsert_connection("ing", access_token=customer_token)
-            flash("ING connected. Accounts fetched.", "success")
+            flash(f"ING connected. {_connect_summary('ing')}", "success")
             return redirect(url_for("dashboard"))
         except ing_client.INGApiError as e:
             flash(str(e), "error")
@@ -1590,7 +1628,9 @@ def synthbank_callback():
             flash("That consent belongs to a different customer.", "error")
             return redirect(url_for("index"))
         _upsert_connection(synthbank_store.GEN_PREFIX + bank, consent_id=consent_id)
-        flash(f"{_bank_name(bank)} connected. Generated test accounts fetched.", "success")
+        flash(f"{_bank_name(bank)} connected. "
+              f"{_connect_summary(synthbank_store.GEN_PREFIX + bank)} These are generated test accounts.",
+              "success")
         return redirect(url_for("dashboard"))
     except synthbank_client.SynthBankError as e:
         flash(str(e), "error")
