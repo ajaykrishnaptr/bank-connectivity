@@ -61,6 +61,7 @@ import ing_client  # noqa: E402
 import llm  # noqa: E402
 import observability  # noqa: E402
 import nordea_client  # noqa: E402
+import pm_content  # noqa: E402
 import psd2_client  # noqa: E402
 import synthbank_client  # noqa: E402
 from logging_config import log  # noqa: E402
@@ -561,17 +562,28 @@ def load_user(user_id):
 # templates use it only to label the synthetic bank data honestly.
 IS_HOSTED = bool(os.getenv("VERCEL"))
 
-# The product and the internal view are the same app on two hostnames.
-# OPS_HOST serves only the operations view; every other host serves only the
-# product. Unset (local development) means one host serves both.
+# The product and the two internal views are one app on three hostnames.
+# OPS_HOST serves only the operations view, PM_HOST only the product-management
+# view, and every other host only the product itself. Unset (local development)
+# means one host serves all three, reachable at /ops and /pm.
 OPS_HOST = (os.getenv("OPS_HOST") or "").lower()
+PM_HOST = (os.getenv("PM_HOST") or "").lower()
 PRODUCT_URL = os.getenv("PRODUCT_URL", "https://fintnet.ai")
-# Endpoints the operations host serves; everything else there goes to the product.
+# Endpoints each internal host serves; everything else there goes to the product.
 _OPS_ENDPOINTS = {"ops", "login", "logout", "signup", "static"}
+_PM_ENDPOINTS = {"pm", "login", "logout", "signup", "static"}
+
+
+def _host() -> str:
+    return request.host.split(":")[0].lower()
 
 
 def _on_ops_host() -> bool:
-    return bool(OPS_HOST) and request.host.split(":")[0].lower() == OPS_HOST
+    return bool(OPS_HOST) and _host() == OPS_HOST
+
+
+def _on_pm_host() -> bool:
+    return bool(PM_HOST) and _host() == PM_HOST
 
 
 @app.before_request
@@ -589,22 +601,30 @@ def _log_request(response):
             "endpoint": request.endpoint, "status_code": response.status_code,
             "latency_ms": int((time.time() - request.environ.get("_started", time.time())) * 1000),
             "user_id": getattr(current_user, "id", None) if current_user else None,
-            "host": request.host.split(":")[0], "view": "ops" if _on_ops_host() else "product",
+            "host": _host(),
+            "view": "ops" if _on_ops_host() else ("pm" if _on_pm_host() else "product"),
         })
     return response
 
 
 @app.before_request
 def _split_product_and_ops():
-    """Keep the two views apart: no operations page on the product host, and no
-    product pages on the operations host."""
+    """Keep the three views apart. An internal host serves its own view, its
+    sign-in pages and the crons, and sends anything else to the product. The
+    product host serves neither internal view once their hostnames exist."""
     endpoint = (request.endpoint or "").split(".")[0]
-    if _on_ops_host():
-        if endpoint == "index":            # the operations host opens on the operations view
-            return redirect(url_for("ops"))
-        if endpoint and endpoint not in _OPS_ENDPOINTS and not endpoint.startswith("cron"):
+    for on_host, home, served in ((_on_ops_host(), "ops", _OPS_ENDPOINTS),
+                                  (_on_pm_host(), "pm", _PM_ENDPOINTS)):
+        if not on_host:
+            continue
+        if endpoint == "index":            # an internal host opens on its own view
+            return redirect(url_for(home))
+        if endpoint and endpoint not in served and not endpoint.startswith("cron"):
             return redirect(PRODUCT_URL)
-    elif OPS_HOST and endpoint == "ops":
+        return None
+    if OPS_HOST and endpoint == "ops":
+        abort(404)
+    if PM_HOST and endpoint == "pm":
         abort(404)
 
 
@@ -618,8 +638,8 @@ app.jinja_env.tests["generated"] = lambda account: bool(account and (account.res
 @app.context_processor
 def inject_flags():
     return {"is_hosted": IS_HOSTED, "assistant_enabled": llm.available(),
-            "ops_view": _on_ops_host(), "product_url": PRODUCT_URL,
-            "bank_colors": BANK_COLORS}
+            "ops_view": _on_ops_host(), "pm_view": _on_pm_host(),
+            "product_url": PRODUCT_URL, "bank_colors": BANK_COLORS}
 
 
 app.register_blueprint(cron.bp)
@@ -1001,7 +1021,7 @@ def login():
         return redirect(url_for("ops"))
     if current_user.is_authenticated and request.method == "GET":
         # Show the form instead of bouncing home, so a viewer can switch persona.
-        return render_template("login.html", demo_users=[] if _on_ops_host() else DEMO_LOGIN,
+        return render_template("login.html", demo_users=[] if (_on_ops_host() or _on_pm_host()) else DEMO_LOGIN,
                                demo_password=DEMO_PASSWORD, signed_in_as=current_user.email)
     if request.method == "POST":
         email    = request.form.get("email", "").strip().lower()
@@ -1019,12 +1039,13 @@ def login():
                                                   "user_id": user.id, "email": email,
                                                   "switched_from": previous})
             # On the operations host the product pages are elsewhere: land on the view itself.
-            default = url_for("ops") if _on_ops_host() else url_for("index")
+            default = (url_for("ops") if _on_ops_host()
+                       else url_for("pm") if _on_pm_host() else url_for("index"))
             return redirect(request.args.get("next") or default)
         # Don't tell the attacker which half was wrong.
         log.warning("auth.login.failed", extra={"event": "auth.login.failed", "email": email})
         flash("Invalid email or password.", "error")
-    return render_template("login.html", demo_users=[] if _on_ops_host() else DEMO_LOGIN,
+    return render_template("login.html", demo_users=[] if (_on_ops_host() or _on_pm_host()) else DEMO_LOGIN,
                            demo_password=DEMO_PASSWORD,
                            signed_in_as=current_user.email if current_user.is_authenticated else None)
 
@@ -1792,6 +1813,28 @@ def ask_feedback():
                                               "trace_id": trace_id, "useful": useful})
         flash("Thanks: your verdict is recorded against this answer's trace.", "success")
     return redirect(url_for("ask"))
+
+
+_PM_TABS = (("market", "Market"), ("competitors", "Competitors"),
+            ("roadmap", "Roadmap"), ("slides", "Slides"))
+
+
+@app.route("/pm")
+@login_required
+def pm():
+    """The product-management view: market read, competitor landscape, roadmap
+    and the panel deck.
+
+    Same guard as /ops, and on PM_HOST it is the only page served. The content
+    is authored in pm_content.py rather than stored, because it is written
+    rather than collected.
+    """
+    if current_user.role != "tpp_admin":
+        abort(404)
+    tab = request.args.get("tab", "market")
+    if tab not in dict(_PM_TABS):
+        tab = "market"
+    return render_template("pm.html", tab=tab, tabs=_PM_TABS, c=pm_content)
 
 
 @app.route("/ops")

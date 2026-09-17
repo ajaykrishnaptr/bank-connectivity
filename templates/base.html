@@ -490,14 +490,14 @@
 
 <nav class="topnav" aria-label="Primary">
   <div class="topnav-inner">
-    <a class="nav-logo" href="{{ product_url if ops_view else url_for('index') }}">
+    <a class="nav-logo" href="{{ product_url if (ops_view or pm_view) else url_for('index') }}">
       <div class="nav-logo-icon" aria-hidden="true">FN</div>
       <div class="nav-logo-text">
         <div class="nav-logo-name">FintNet</div>
-        <div class="nav-logo-sub">{% if ops_view %}Operations{% else %}Bank Integrations{% endif %}</div>
+        <div class="nav-logo-sub">{% if ops_view %}Operations{% elif pm_view %}Product{% else %}Bank Integrations{% endif %}</div>
       </div>
     </a>
-    {% if current_user.is_authenticated and not ops_view %}
+    {% if current_user.is_authenticated and not ops_view and not pm_view %}
     <div class="nav-divider"></div>
     {# `nav_section` lets a sub-page (an account's balances, say) light up
        the section it belongs to. Pages that don't set it fall back to
@@ -509,7 +509,8 @@
       <a href="{{ url_for('spending') }}" {% if here == 'spending' %}class="active" aria-current="page"{% endif %}>Spending</a>
       <a href="{{ url_for('recurring') }}" {% if here == 'recurring' %}class="active" aria-current="page"{% endif %}>Recurring</a>
       <a href="{{ url_for('ask') }}" {% if here == 'ask' %}class="active" aria-current="page"{% endif %}>Ask</a>
-      {% if current_user.role == 'tpp_admin' %}<a href="{{ url_for('ops') }}" {% if here == 'ops' %}class="active" aria-current="page"{% endif %}>Ops</a>{% endif %}
+      {% if current_user.role == 'tpp_admin' %}<a href="{{ url_for('ops') }}" {% if here == 'ops' %}class="active" aria-current="page"{% endif %}>Ops</a>
+      <a href="{{ url_for('pm') }}" {% if here == 'pm' %}class="active" aria-current="page"{% endif %}>Product</a>{% endif %}
       <a href="{{ url_for('index') }}" {% if here == 'index' %}class="active" aria-current="page"{% endif %}>Banks</a>
     </div>
     {% elif ops_view %}
@@ -517,6 +518,12 @@
     <div class="nav-links">
       <span class="nav-current" aria-current="page">Operations</span>
       <a href="{{ product_url }}">Product <span aria-hidden="true">↗</span></a>
+    </div>
+    {% elif pm_view %}
+    <div class="nav-divider"></div>
+    <div class="nav-links">
+      <span class="nav-current" aria-current="page">Product</span>
+      <a href="{{ product_url }}">App <span aria-hidden="true">↗</span></a>
     </div>
     {% endif %}
     <div class="nav-spacer"></div>
