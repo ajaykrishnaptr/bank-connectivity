@@ -35,10 +35,18 @@ from models import Account, BankConnection, Transaction, db
 MAX_ROUNDS = 6
 MAX_TOKENS = 1500
 
+# Every phrasing here must be caught by code, because the model refusing on its
+# own judgement is not a control. "Should I take out an overdraft?" reached the
+# model, which declined sensibly, and nothing recorded that a refusal had
+# happened. Borrowing, investing and retirement money are all outside the line.
 _REFUSE = re.compile(
-    r"\b(loans?|mortgages?|credit ?scores?|creditworthiness|borrow(ing)?|kredite?|darlehen|schufa|"
-    r"invest(ing|ment|ments|or|ors)?|stocks?|shares|etfs?|crypto(currency|currencies)?|bitcoin|aktien?|"
-    r"geldanlage|should i buy)\b", re.IGNORECASE)
+    r"\b(loans?|mortgages?|remortgages?|credit ?scores?|creditworthiness|borrow(ing)?|kredite?|darlehen|schufa|"
+    r"overdrafts?|dispo(kredit)?|refinanc\w+|lend(ing|er)?|debts?|consolidat\w+|interest rates?|apr|"
+    r"invest(ing|ment|ments|or|ors)?|stocks?|shares|etfs?|isas?|sparplan|brokers?|"
+    r"(index|mutual|investment|hedge) funds?|fonds|"
+    r"crypto(currency|currencies)?|bitcoin|aktien?|geldanlage|"
+    r"pensions?|retirement|rente|altersvorsorge|"
+    r"should i buy)\b", re.IGNORECASE)
 
 REFUSAL = ("I can't help with credit, loans or investment decisions. I can answer questions about your "
            "spending, income, balances and recurring payments across your connected banks.")
@@ -104,12 +112,20 @@ TOOLS: list[dict] = [
      "description": "Recurring payments (fixed subscriptions and variable bills), recurring income, and wasted-spend signals such as price rises and duplicate subscriptions.",
      "input_schema": {"type": "object", "properties": {}, "additionalProperties": False}},
     {"name": "find_transactions",
-     "description": "Individual transactions matching filters, newest first, at most 25 listed. count_matched is how many matched in total, so use it for \"how many times\" questions.",
+     "description": "Individual transactions matching filters, at most 25 listed, WITH totals and extremes over every match. "
+                    "Use count_matched for \"how many times\", total_eur for \"how much in total\", and largest/smallest "
+                    "for \"biggest\" or \"smallest\" questions. Never add up the listed rows yourself and never treat the "
+                    "first listed row as the largest: only some rows are listed. sort=amount orders the listing by size "
+                    "instead of by date. bank restricts it to one connected bank, so per-bank totals and extremes are "
+                    "answerable. If matched_nothing comes back, the filter found nothing: prefer category over "
+                    "merchant_contains and retry before telling the customer they spent nothing.",
      "input_schema": {"type": "object", "properties": {
          "date_from": {"type": "string"}, "date_to": {"type": "string"}, "category": {"type": "string"},
          "merchant_contains": {"type": "string"},
          "direction": {"type": "string", "enum": ["out", "in", "any"]},
-         "min_amount_eur": {"type": "number"}, "limit": {"type": "integer"}},
+         "min_amount_eur": {"type": "number"}, "limit": {"type": "integer"},
+         "sort": {"type": "string", "enum": ["date", "amount"]},
+         "bank": {"type": "string"}},
          "additionalProperties": False}},
 ]
 
@@ -121,15 +137,35 @@ def _d(value: Any, default: date) -> date:
         return default
 
 
+UNRESOLVED_CATEGORY = "\x00unresolved"
+
+
 def _category(name: str | None) -> str | None:
-    """The app's category whose name matches, whatever case or spacing the model used."""
+    """The app's category whose name matches, whatever case, spacing or wording the model used.
+
+    Returns UNRESOLVED_CATEGORY when nothing matches, so the caller can say so.
+    An earlier version fell back to the model's own string, and the tools then
+    reported a confident zero for a category that does not exist: asked about
+    "Health and Fitness", the assistant answered that nothing had been spent,
+    while 12 transactions sat under "Health & Fitness".
+    """
     if not name:
         return None
-    key = re.sub(r"[^a-z]", "", name.lower())
+    def key(text: str) -> str:
+        return re.sub(r"[^a-z]", "", text.lower())
+    k = key(name)
     for category in CATEGORIES:
-        if re.sub(r"[^a-z]", "", category.lower()) == key:
+        if key(category) == k:
             return category
-    return name
+    # A near miss on a two-word name: "Cash" for "ATM / Cash", "Health and
+    # Fitness" for "Health & Fitness". Accept it only when one category matches.
+    loose = k.replace("and", "")
+    near = [c for c in CATEGORIES
+            if loose and (loose in key(c).replace("and", "") or key(c).replace("and", "") in loose)]
+    return near[0] if len(near) == 1 else UNRESOLVED_CATEGORY
+
+
+UNRESOLVED_BANK = "\x00unresolvedbank"
 
 
 class Tools:
@@ -151,6 +187,26 @@ class Tools:
 
     def _eur(self, t: Transaction, a: Account) -> float:
         return currency_utils.to_eur(float(t.amount or 0), t.currency or a.currency or "EUR", self.rates)
+
+    def _banks(self) -> list[str]:
+        return sorted({a.bank for _, a in self.all_rows})
+
+    def _bank(self, name: str | None) -> str | None:
+        """The connected bank whose name matches, whatever case or spacing the model used.
+
+        The filter used to compare the raw string, so bank="Commerzbank" matched
+        nothing and the tool reported zero spending at a bank holding EUR 19,475.
+        """
+        if not name:
+            return None
+        def key(text: str) -> str:
+            return re.sub(r"[^a-z0-9]", "", text.lower())
+        k = key(name)
+        for bank in self._banks():
+            if key(bank) == k:
+                return bank
+        near = [b for b in self._banks() if k and (k in key(b) or key(b) in k)]
+        return near[0] if len(near) == 1 else UNRESOLVED_BANK
 
     def _between(self, d0: date, d1: date, bank: str | None = None):
         for t, a in self.rows:
@@ -186,7 +242,13 @@ class Tools:
     def spending_by_category(self, date_from: str, date_to: str, bank: str | None = None,
                              category: str | None = None) -> dict:
         d0, d1 = _d(date_from, date.today() - timedelta(days=30)), _d(date_to, date.today())
+        bank_asked = bank
+        bank = self._bank(bank)
+        if bank == UNRESOLVED_BANK:
+            return {"error": f"no connected bank named {bank_asked!r}", "connected_banks": self._banks()}
         wanted = _category(category)
+        if wanted == UNRESOLVED_CATEGORY:
+            return {"error": f"there is no category named {category!r}", "valid_categories": list(CATEGORIES)}
         totals, counts = defaultdict(float), defaultdict(int)
         for t, a in self._between(d0, d1, bank):
             if float(t.amount or 0) < 0:
@@ -268,14 +330,30 @@ class Tools:
 
     def find_transactions(self, date_from: str | None = None, date_to: str | None = None,
                           category: str | None = None, merchant_contains: str | None = None,
-                          direction: str = "any", min_amount_eur: float | None = None, limit: int = 15) -> dict:
+                          direction: str = "any", min_amount_eur: float | None = None,
+                          limit: int = 15, sort: str = "date", bank: str | None = None) -> dict:
+        """Matching transactions, plus the totals and extremes over everything that matched.
+
+        The aggregates are the point. Only `limit` rows are listed, so a model
+        that adds up the listed rows answers "how much in total" from a sample,
+        and one that reads the first row of a date-sorted list answers "what was
+        the largest" with the most recent. Both are computed here instead.
+        """
         d0, d1 = _d(date_from, date(2000, 1, 1)), _d(date_to, date.today())
+        bank_asked = bank
+        bank = self._bank(bank)
+        if bank == UNRESOLVED_BANK:
+            return {"error": f"no connected bank named {bank_asked!r}", "connected_banks": self._banks()}
         needle = (merchant_contains or "").lower()
         wanted = _category(category)     # the model may write "dining" for "Dining"
-        hits, matched = [], 0
+        if wanted == UNRESOLVED_CATEGORY:
+            return {"error": f"there is no category named {category!r}", "valid_categories": list(CATEGORIES)}
+        matched_rows = []
         in_range = [(t, a) for t, a in self.all_rows if t.booking_date and d0 <= t.booking_date <= d1]
-        for t, a in sorted(in_range, key=lambda x: x[0].booking_date, reverse=True):
+        for t, a in in_range:
             eur = self._eur(t, a)
+            if bank and a.bank != bank:
+                continue
             if wanted and (t.category or "") != wanted:
                 continue
             if needle and needle not in (t.creditor_name or t.debtor_name or "").lower():
@@ -284,15 +362,48 @@ class Tools:
                 continue
             if min_amount_eur is not None and abs(eur) < float(min_amount_eur):
                 continue
-            matched += 1
-            if len(hits) < max(1, min(int(limit or 15), 25)):
-                hits.append({"date": str(t.booking_date), "bank": a.bank,
-                             "counterparty": t.creditor_name or t.debtor_name, "category": t.category,
-                             "amount_native": float(t.amount or 0), "currency": t.currency,
-                             "amount_eur": round(eur, 2), "own_account_transfer": db_utils.is_internal(t, self.own)})
-        return {"transactions": hits, "count_returned": len(hits), "count_matched": matched,
-                "category": wanted or "all",
-                "note": "count_matched is every transaction that matched; count_returned is how many are listed"}
+            matched_rows.append({"date": str(t.booking_date), "bank": a.bank,
+                                 "counterparty": t.creditor_name or t.debtor_name, "category": t.category,
+                                 "amount_native": float(t.amount or 0), "currency": t.currency,
+                                 "amount_eur": round(eur, 2),
+                                 "own_account_transfer": db_utils.is_internal(t, self.own)})
+
+        by_date = sorted(matched_rows, key=lambda r: r["date"], reverse=True)
+        by_size = sorted(matched_rows, key=lambda r: abs(r["amount_eur"]), reverse=True)
+        listed = (by_size if sort == "amount" else by_date)[:max(1, min(int(limit or 15), 25))]
+
+        # Money the customer moved between their own accounts is not spending or
+        # income, so it carries its own total rather than silently joining the main one.
+        external = [r for r in matched_rows if not r["own_account_transfer"]]
+        out = {"transactions": listed, "count_returned": len(listed), "count_matched": len(matched_rows),
+               "category": wanted or "all", "sorted_by": "amount" if sort == "amount" else "date",
+               "total_eur": round(sum(abs(r["amount_eur"]) for r in external), 2),
+               "count_excluding_own_transfers": len(external),
+               "note": "total_eur, largest and smallest cover EVERY matched transaction, not only the listed ones. "
+                       "total_eur excludes transfers between the customer's own accounts; count_matched includes them."}
+        if external:
+            big = max(external, key=lambda r: abs(r["amount_eur"]))
+            small = min(external, key=lambda r: abs(r["amount_eur"]))
+            out["largest"] = {k: big[k] for k in ("date", "bank", "counterparty", "category", "amount_eur")}
+            out["smallest"] = {k: small[k] for k in ("date", "bank", "counterparty", "category", "amount_eur")}
+        if not matched_rows:
+            # "Nothing matched this filter" is not "the customer spent nothing".
+            # merchant_contains is a literal substring of the counterparty name, and
+            # the names are in the bank's own language, so a search for "ATM" misses
+            # "Bargeldauszahlung Muenchen".
+            out["matched_nothing"] = True
+            out["filters_used"] = {k: v for k, v in (("category", category), ("merchant_contains", merchant_contains),
+                                                     ("min_amount_eur", min_amount_eur), ("direction", direction),
+                                                     ("bank", bank))
+                                   if v not in (None, "any")}
+            out["guidance"] = ("No transaction matched these filters, which does not mean the customer spent nothing. "
+                               "merchant_contains is a literal substring of the counterparty name in the bank's own "
+                               "language. Retry with a category from valid_categories, or with no merchant filter, "
+                               "before reporting an absence.")
+            out["valid_categories"] = list(CATEGORIES)
+        if len(external) != len(matched_rows):
+            out["total_eur_including_own_transfers"] = round(sum(abs(r["amount_eur"]) for r in matched_rows), 2)
+        return out
 
     def run(self, name: str, args: dict) -> dict:
         fn = getattr(self, name, None)
