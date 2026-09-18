@@ -31,11 +31,11 @@ from dotenv import load_dotenv  # noqa: E402
 
 load_dotenv(ROOT / ".env")
 
-import app as appmod  # noqa: E402
-import categorize as cat  # noqa: E402
-import evaluate  # noqa: E402
-import llm  # noqa: E402
-import observability  # noqa: E402
+from fintnet import app as appmod  # noqa: E402
+from fintnet.ai import categorize as cat  # noqa: E402
+from fintnet.ai import evaluate  # noqa: E402
+from fintnet.ai import llm  # noqa: E402
+from fintnet.telemetry import observability  # noqa: E402
 
 
 def _save(kind: str, summary: dict) -> None:

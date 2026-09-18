@@ -19,14 +19,8 @@ __pycache__/
 .claude/
 # Local-only material that must never be uploaded.
 .vercel/
-mc_aiia_spike.py
-spike_n26.py
-generate_psd2_cert.py
-generate_ocsp_signer.py
-refresh_crl.py
-deploy_crl.sh
-/FintNet_*
-/STRATEGY_AND_METRICS.md
-/base.html
+pki/
+experiments/
+scripts/
 .agents/
 skills-lock.json

@@ -15,15 +15,15 @@ import os, re, sys, json, sqlite3
 from datetime import date, timedelta
 from pathlib import Path
 
-ROOT = Path.home() / "bank_connectivity"
+ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 os.chdir(ROOT)
 from dotenv import load_dotenv
 load_dotenv(ROOT / ".env")
 
-import app as appmod          # noqa: E402
-import assistant              # noqa: E402
-from models import User       # noqa: E402
+from fintnet import app as appmod          # noqa: E402
+from fintnet.ai import assistant              # noqa: E402
+from fintnet.models import User       # noqa: E402
 
 DB = ROOT / "instance" / "ais.db"
 PERSONA = "thomas.mann@example.de"

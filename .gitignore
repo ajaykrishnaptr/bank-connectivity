@@ -2,7 +2,6 @@
 certs/
 logs/
 instance/
-docs/
 __pycache__/
 *.pyc
 .DS_Store

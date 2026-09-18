@@ -4,7 +4,7 @@
     {
       "src": "api/index.py",
       "use": "@vercel/python",
-      "config": { "includeFiles": ["templates/**", "synthbank/**", "evals/results/assistant_*.json"] }
+      "config": { "includeFiles": ["fintnet/templates/**", "fintnet/synthbank/**", "evals/results/assistant_*.json"] }
     }
   ],
   "routes": [

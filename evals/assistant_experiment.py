@@ -44,13 +44,13 @@ load_dotenv(ROOT / ".env")
 from flask_login import login_user  # noqa: E402
 from langfuse import Evaluation, RegressionError  # noqa: E402
 
-import app as appmod  # noqa: E402
-import assistant  # noqa: E402
+from fintnet import app as appmod  # noqa: E402
+from fintnet.ai import assistant  # noqa: E402
 import judge  # noqa: E402
-import llm  # noqa: E402
-import observability
-import prompts  # noqa: E402
-from models import User  # noqa: E402
+from fintnet.ai import llm  # noqa: E402
+from fintnet.telemetry import observability
+from fintnet.ai import prompts  # noqa: E402
+from fintnet.models import User  # noqa: E402
 
 DATASET = "fintnet-assistant-questions"
 PERSONA = os.getenv("EVAL_PERSONA", "thomas.mann@example.de")

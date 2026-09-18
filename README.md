@@ -81,11 +81,11 @@ Accounts created through sign-up hold no generated accounts and use the live san
 
 ## How the AI is used
 
-The model is Claude Haiku 4.5 (`claude-haiku-4-5`). `llm.py` is the only module that calls it, with a per-instance call cap (`LLM_MAX_CALLS`), typed errors and a Langfuse trace for every call.
+The model is Claude Haiku 4.5 (`claude-haiku-4-5`). `fintnet/ai/llm.py` is the only module that calls it, with a per-instance call cap (`LLM_MAX_CALLS`), typed errors and a Langfuse trace for every call.
 
 ### Money questions (`/ask`)
 
-`assistant.py` gives the model 7 deterministic tools:
+`fintnet/ai/assistant.py` gives the model 7 deterministic tools:
 
 | Tool | Returns |
 |---|---|
@@ -107,7 +107,7 @@ The model picks tools for at most 6 rounds. The tools return every total, count 
 
 ### Transaction categorisation
 
-`categorize.py` sorts every transaction into 14 categories through a waterfall, cheapest layer first:
+`fintnet/ai/categorize.py` sorts every transaction into 14 categories through a waterfall, cheapest layer first:
 
 1. **Overrides.** A short hand-kept list for merchants a model gets wrong (for example "Infosys" is salary income).
 2. **Cache.** `MerchantCategory`, keyed on the normalised merchant name. Each merchant goes to the model once.
@@ -170,7 +170,7 @@ flowchart LR
 - **Web app:** Flask with Flask-Login and SQLAlchemy. `api/index.py` is the Vercel entry point.
 - **Storage:** Neon Postgres on Vercel, SQLite (`ais.db`) locally. `BankConnection` holds each user's tokens and consents, so connections survive across function instances.
 - **Currency:** live ECB rates from `frankfurter.app`, cached for 1 hour, with a hardcoded fallback. Totals convert to EUR; single transactions show their own currency.
-- **Bank clients:** one module per bank (`psd2_client.py` for UniCredit, `commerzbank_client.py`, `nordea_client.py`, `ing_client.py`, `synthbank_client.py`). `app._fetch_and_store` syncs accounts and transactions after every connect.
+- **Bank clients:** one module per bank in `fintnet/banks/` (`unicredit.py`, `commerzbank.py`, `nordea.py`, `ing.py`), plus `fintnet/synthbank/client.py` for generated accounts. `app._fetch_and_store` syncs accounts and transactions after every connect.
 
 ---
 
@@ -179,7 +179,7 @@ flowchart LR
 ```bash
 python3 -m venv .venv
 .venv/bin/pip install -r requirements.txt
-.venv/bin/python app.py
+.venv/bin/python run.py
 ```
 
 Open https://localhost:5000 and accept the browser warning (the dev server uses a self-signed certificate, and UniCredit requires an HTTPS redirect URI).
@@ -187,8 +187,8 @@ Open https://localhost:5000 and accept the browser warning (the dev server uses 
 An empty database seeds the 5 demo logins on startup. To add the evaluation population:
 
 ```bash
-.venv/bin/python seed_data.py                  # 5 demo logins plus 200 evaluation customers, 13 months each
-.venv/bin/python seed_data.py --population 0   # demo logins only
+.venv/bin/python -m fintnet.seed_data                  # 5 demo logins plus 200 evaluation customers, 13 months each
+.venv/bin/python -m fintnet.seed_data --population 0   # demo logins only
 ```
 
 Seeding is re-runnable: it only creates missing users, customers and history.
@@ -247,13 +247,13 @@ curl -H "Authorization: Bearer $CRON_SECRET" https://bank-connectivity.vercel.ap
 The live sandboxes return a handful of static transactions, which is too little history for an assistant or an evaluation. `synthbank/` generates accounts and transactions and serves them through a Berlin Group NextGenPSD2 AIS API inside the app.
 
 - **Customers:** the 5 demo logins, plus an evaluation population (200 by default) across DE, FI, SE (in SEK), NL and IT that no login can see.
-- **Accounts at real bank names:** each demo login holds generated accounts at the banks listed in `synthbank/catalog.py` (`DEMO_CUSTOMERS`), each with a role. The main account books salary, rent and bills; the savings account gets the monthly savings transfer; a card account books subscriptions, gym and shopping; an everyday account books dining, transport and half the groceries. The main account tops up card and everyday accounts at other banks on the 2nd of each month; these transfers and the savings transfer carry the other account's IBAN, so FintNet recognises them as internal. In the app, generated accounts are stored under the bank's name so they add up with its live sandbox accounts, and are tagged as generated.
+- **Accounts at real bank names:** each demo login holds generated accounts at the banks listed in `fintnet/synthbank/catalog.py` (`DEMO_CUSTOMERS`), each with a role. The main account books salary, rent and bills; the savings account gets the monthly savings transfer; a card account books subscriptions, gym and shopping; an everyday account books dining, transport and half the groceries. The main account tops up card and everyday accounts at other banks on the 2nd of each month; these transfers and the savings transfer carry the other account's IBAN, so FintNet recognises them as internal. In the app, generated accounts are stored under the bank's name so they add up with its live sandbox accounts, and are tagged as generated.
 - **History:** a rolling 13 months, seeded once and then extended one day at a time by the feed job. Random generators are seeded by customer and date, so reruns reproduce the same data.
 - **Realistic merchants:** each purchase draws a category weighted by persona, then a merchant that belongs to it: about 60% known merchants, 30% new merchants built from templates and 10% hard cases (payment-facilitator prefixes, truncation, typos, misleading names). No language model writes the data.
 - **Subscriptions and price rises:** about a third of customers get a 15% price rise on one subscription partway through the year, so the price-rise alert has something real to find.
 - **Label firewall:** the true category of every transaction lives in `sb_labels`, which only the evaluation job reads. The API, the tools and the model never see it.
 - **API:** `POST /synthetic-bank/v1/consents?bank=<bank>`, `GET /synthetic-bank/v1/accounts`, `.../balances` and `.../transactions` with a `Consent-ID` header, and a sign-in and consent screen at `/synthetic-bank/authorise/<consent>`. A consent covers one customer's accounts at one bank.
-- **Rebuild:** `python seed_data.py --population 0 --reset-demo` regenerates the demo logins' accounts and removes their FintNet accounts and connections.
+- **Rebuild:** `python -m fintnet.seed_data --population 0 --reset-demo` regenerates the demo logins' accounts and removes their FintNet accounts and connections.
 
 ---
 
@@ -262,7 +262,7 @@ The live sandboxes return a handful of static transactions, which is too little 
 ### UniCredit
 
 - **mTLS with a QWAC** on every call, and a Berlin Group consent that the user approves on UniCredit's own page.
-- **F5 BIG-IP gateway.** The sandbox is behind an F5 access gateway. A request without the gateway's session cookie is redirected to `/my.policy`, an HTML page a browser submits by itself. `psd2_client.py` keeps one cookie session per process and retries when that page comes back. Before this, most consent requests from Vercel failed.
+- **F5 BIG-IP gateway.** The sandbox is behind an F5 access gateway. A request without the gateway's session cookie is redirected to `/my.policy`, an HTML page a browser submits by itself. `fintnet/banks/unicredit.py` keeps one cookie session per process and retries when that page comes back. Before this, most consent requests from Vercel failed.
 - **Owner name.** The account list leaves out `ownerName`; the sync reads it from the account-details call.
 - **`PSU-IP-Address`** gets a random public-range address on each request, since the hosted demo has no customer IP to forward.
 
@@ -293,13 +293,13 @@ UniCredit's gateway is strict about certificate revocation:
 
 So the leaf certificate points at OCSP and CRL endpoints this project runs over plain HTTP:
 
-- `generate_psd2_cert.py` issues the QWAC chain (root, intermediate, leaf) with ETSI PSD2 `qcStatements` (PSP_AI role, BaFin authority, `PSDDE-BAFIN-19337`). The leaf points at:
+- `pki/generate_psd2_cert.py` issues the QWAC chain (root, intermediate, leaf) with ETSI PSD2 `qcStatements` (PSP_AI role, BaFin authority, `PSDDE-BAFIN-19337`). The leaf points at:
   - `http://ocsp.fintnet.ai`: OCSP responder
   - `http://crl.fintnet.ai/crl.crl`: CRL distribution point
   - `http://crl.fintnet.ai/inter.crt`: issuer certificate for path building
-- `generate_ocsp_signer.py` issues a delegated OCSP signer (`id-kp-OCSPSigning` with `id-pkix-ocsp-nocheck`), so the intermediate's key stays on the laptop and the server only holds the signer's key.
+- `pki/generate_ocsp_signer.py` issues a delegated OCSP signer (`id-kp-OCSPSigning` with `id-pkix-ocsp-nocheck`), so the intermediate's key stays on the laptop and the server only holds the signer's key.
 - Both endpoints run on one Always Free Oracle Cloud VM: `openssl ocsp` as the signing backend behind a small standard-library Python proxy on port 80 that serves the CRL and issuer certificate. Both run as systemd services.
-- `refresh_crl.py` re-signs the CRL (valid for 30 days) and `deploy_crl.sh` copies it to the VM. Run both monthly.
+- `pki/refresh_crl.py` re-signs the CRL (valid for 30 days) and `pki/deploy_crl.sh` copies it to the VM. Run both monthly.
 
 The bank imports `chain.crt` once; later leaf certificates under the same intermediate need no new trust. Vercel cannot serve these endpoints because it forces HTTPS. The `/cron/health` job and the operations view check the CRL, OCSP and certificate expiry every day.
 
@@ -310,36 +310,43 @@ The bank imports `chain.crt` once; later leaf certificates under the same interm
 | Layer | Where | Contains |
 |---|---|---|
 | Application log | `logs/fintnet.json` locally (rotated at 10 MB, 5 backups), the Vercel runtime log in production | One JSON object per line: `auth.*`, `connection.upsert`, `connection.disconnect`, `sync.complete` with `latency_ms`, `sync.account.skipped`, `sync.owner_name.skipped`, `categorize.model.failed`, `currency.fetch_failed`, `cron.failed`, `unicredit.gateway_session` |
-| Event log | `eventlog.py`: `logs/events.jsonl` locally, Postgres on Vercel | Every bank API call (bank, method, host, path, status, latency), assistant request, tool call, model call, job run and score, in Splunk HTTP Event Collector format. `spl.py` searches it from the operations view. Set `SPLUNK_HEC_URL` and `SPLUNK_HEC_TOKEN` to send the same lines to Splunk |
-| Traces | Langfuse (`observability.py`) | Model generations with tokens, tool spans, scores, datasets and experiment runs, with IBANs masked |
+| Event log | `fintnet/telemetry/eventlog.py`: `logs/events.jsonl` locally, Postgres on Vercel | Every bank API call (bank, method, host, path, status, latency), assistant request, tool call, model call, job run and score, in Splunk HTTP Event Collector format. `fintnet/telemetry/spl.py` searches it from the operations view. Set `SPLUNK_HEC_URL` and `SPLUNK_HEC_TOKEN` to send the same lines to Splunk |
+| Traces | Langfuse (`fintnet/telemetry/observability.py`) | Model generations with tokens, tool spans, scores, datasets and experiment runs, with IBANs masked |
 
 ---
 
 ## Project layout
 
-| Path | Purpose |
-|---|---|
-| `app.py` | Routes, analytics, recurring payment and spend alert detection, sync |
-| `api/index.py` | Vercel entry point |
-| `models.py`, `db_utils.py` | Tables and per-user upserts, with duplicate protection on transaction id |
-| `auth.py` | UniCredit consent flow helpers |
-| `psd2_client.py`, `commerzbank_client.py`, `nordea_client.py`, `ing_client.py` | Live sandbox clients |
-| `synthbank/`, `synthbank_client.py` | Generated accounts: catalogue, generator, store, API, client |
-| `llm.py` | The only Claude call site: model, call cap, errors, tracing |
-| `assistant.py` | `/ask` tools, tool loop and refusal |
-| `categorize.py` | Categorisation waterfall and provisional upgrades |
-| `evaluate.py`, `evals/` | Daily categoriser evaluation, benchmark and assistant experiments, held-out question sets, judge, human review queue |
-| `eventlog.py`, `spl.py` | Event log and its SPL-style search |
-| `cron.py` | Daily job routes |
-| `health.py` | CRL, OCSP and certificate checks |
-| `observability.py`, `logging_config.py` | Langfuse, application log |
-| `currency_utils.py` | ECB exchange rates |
-| `runtime_certs.py` | Certificates from env vars on Vercel |
-| `seed_data.py` | Demo logins, generated customers, `--reset-demo` |
-| `generate_psd2_cert.py`, `generate_ocsp_signer.py`, `refresh_crl.py`, `deploy_crl.sh` | Certificate and revocation tooling (local only) |
-| `templates/` | Jinja pages |
+```
+api/index.py            Vercel entry point
+run.py                  Local development server
+fintnet/                The app
+  app.py                Routes, analytics, recurring payment and spend alert detection, sync
+  models.py             Tables
+  db_utils.py           Per-user upserts, with duplicate protection on transaction id
+  cron.py               Daily job routes
+  health.py             CRL, OCSP and certificate checks
+  currency_utils.py     ECB exchange rates
+  runtime_certs.py      Certificates from env vars on Vercel
+  seed_data.py          Demo logins, generated customers, --reset-demo, --admin-email
+  banks/                Live sandbox clients: unicredit, unicredit_consent, commerzbank, nordea, ing
+  synthbank/            Generated accounts: catalogue, generator, store, Berlin Group API, client
+  ai/                   llm (the only Claude call site), assistant (/ask tools, tool loop, refusal),
+                        categorize, prompts, evaluate (daily categoriser evaluation)
+  telemetry/            logging_config (application log), eventlog, spl (event search),
+                        observability (Langfuse)
+  templates/            Jinja pages
+evals/                  Benchmark and assistant experiments, held-out question sets, judge,
+                        human review queue
+pki/                    QWAC chain, OCSP signer, CRL refresh and deploy (local only)
+scripts/                One-off maintenance: headless sync, category backfill
+experiments/            The earlier local-model work, kept for reference
+docs/PRD.md             The original product requirements (May 2026)
+```
 
-**Earlier local-model experiments.** Before the hosted build, categorisation ran fully offline on Ollama with Qwen 2.5 3B. These scripts remain for reference and need a local Ollama: `agent.py` (a hand-written tool loop over the transactions database), `eval_categorizer.py` (rules against the local model), `backfill_categories.py`, `genai_json_demo.py` and `genai_test.py`.
+Run scripts from the repository root as modules, for example `python -m scripts.backfill_categories`.
+
+**Earlier local-model experiments.** Before the hosted build, categorisation ran fully offline on Ollama with Qwen 2.5 3B. `experiments/` keeps that work and needs a local Ollama: `agent.py` (a hand-written tool loop over the transactions database), `eval_categorizer.py` (rules against the local model), `genai_json_demo.py`, `genai_test.py`, and `spike_n26.py`, a TLS test against the N26 sandbox.
 
 ---
 
