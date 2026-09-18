@@ -2,7 +2,9 @@
 
 An Open Banking account information app. It connects to the PSD2 developer sandboxes of 4 European banks, shows every account in one place, and answers money questions across banks with Claude Haiku while code computes every figure.
 
-**Live demo: https://bank-connectivity.vercel.app**
+**Live demo: https://fintnet.ai** (sign in with any test login below)
+
+**Operations view: https://ops.fintnet.ai** (admin sign-in only; ask for access)
 
 > **Test data only.** UniCredit, Commerzbank, Nordea and ING connect to each bank's public PSD2 developer sandbox with test users. The demo logins also hold generated accounts at those banks, tagged as generated in the app. No real customer data is used anywhere.
 
@@ -36,7 +38,7 @@ An Open Banking account information app. It connects to the PSD2 developer sandb
 | **Spending** | Categories with a per-bank split and the change on the previous period |
 | **Recurring** | Fixed and variable recurring payments and recurring income, detected from 2 or more months of history |
 | **Ask** | Questions about money across all connected banks, answered by Claude Haiku from deterministic tools |
-| **Ops** | Daily job runs, categoriser accuracy by day, certificate and revocation health, model usage, recent events |
+| **Operations** (ops.fintnet.ai) | Daily job runs, categoriser accuracy by day, certificate and revocation health, model usage, and a search over the event log in a subset of Splunk's SPL. Admin accounts only, on its own host |
 
 The app is multi-tenant: each login sees only its own connections and data. Disconnecting revokes the connection and keeps the history.
 
@@ -93,12 +95,14 @@ The model is Claude Haiku 4.5 (`claude-haiku-4-5`). `llm.py` is the only module 
 | `monthly_cash_flow` | Income, spending and net per month for up to 13 months, in EUR |
 | `compare_periods` | Spending per category in 2 periods, with the difference and percentage change |
 | `recurring_payments` | Fixed and variable recurring payments, recurring income and the spend alerts |
-| `find_transactions` | Individual transactions matching filters, newest first, at most 25 |
+| `find_transactions` | Transactions matching date, category, merchant, bank, direction and amount filters, with the count, total, largest and smallest over every match. Lists at most 25, newest or largest first |
 
-The model picks tools for at most 6 rounds, and code computes every number it quotes. The page shows the tool trail under each answer and discloses that the answer comes from an AI system.
+The model picks tools for at most 6 rounds. The tools return every total, count and extreme the model needs, so the model has no arithmetic left to do. The page shows the tool trail under each answer and discloses that the answer comes from an AI system.
 
 **Guardrails**
-- Credit, loan, creditworthiness and investment questions are refused in code before any model call. The answer says it came from code and no model ran.
+- Credit, loan, overdraft, debt, investment and pension questions are refused in code before any model call. The answer says it came from code and no model ran.
+- "Can I afford it?" questions get the monthly surplus from code, with the months it came from, and no yes or no. No model runs on this path either.
+- A category or bank the model names that does not exist comes back as unresolved, with the valid options, so an unknown name is never reported as a zero. A filter that matches nothing says so, rather than reading as "you spent nothing".
 - IBANs are masked before traces reach Langfuse.
 
 ### Transaction categorisation
@@ -133,6 +137,14 @@ Evaluations are written to Langfuse as datasets and experiment runs.
 | Hard cases (prefixes, truncation, typos) | 87.5% | 43.8% |
 
 These figures come from one day of synthetic data. They show the categoriser working on the synthetic bank and make no claim about production bank data.
+
+**Held-out questions for the assistant (17 Sep 2026).** `evals/heldout_a.py` to `heldout_d.py` hold 4 sets of 15 questions, written fresh against the product and never used to tune the prompt. Ground truth comes from SQL over the database, not from the assistant's own tools, so a tool bug cannot make the answer and the truth wrong together. Each set was run once before any fix, on Claude Haiku with the `thomas.mann` login:
+
+| Sets | Questions | Passed on the first run |
+|---|---|---|
+| A to D | 60 | 54 (90%) |
+
+The misses traced to defects in the tools and the refusal guard (money totals left to the model, a case-sensitive bank filter, an empty search read as zero, overdraft questions not refused), all now fixed. The same question can still route to a different tool on a different run, so a single run's pass rate is the figure to quote, not a per-question guarantee.
 
 Run an experiment: `python evals/assistant_experiment.py run` or `python evals/categoriser_experiment.py run-benchmark`. Results are also saved to `evals/results/`, which git ignores.
 
@@ -186,6 +198,7 @@ Seeding is re-runnable: it only creates missing users, customers and history.
 | Variable | For |
 |---|---|
 | `FLASK_SECRET_KEY` | Sessions and generated-account consent tokens |
+| `SESSION_IDLE_MINUTES` | Idle sign-out, 15 by default. Set it to 5 to follow the figure the SCA-RTS puts on a bank's own online session |
 | `ANTHROPIC_API_KEY`, `LLM_MODEL=claude-haiku-4-5` | Assistant and categoriser. Without a key, the categoriser falls back to Ollama or rules |
 | `CB_CLIENT_ID`, `CB_CLIENT_SECRET` | Commerzbank sandbox |
 | `NORDEA_CLIENT_ID`, `NORDEA_CLIENT_SECRET`, `NORDEA_COUNTRY` | Nordea sandbox |
@@ -205,9 +218,11 @@ Seeding is re-runnable: it only creates missing users, customers and history.
 | Certificates | Leaf certificates and keys are sensitive env vars (`UC_CERT_B64`, `UC_KEY_B64`, `ING_TLS_CERT_B64`, `ING_TLS_KEY_B64`, `ING_SIGNING_CERT_B64`, `ING_SIGNING_KEY_B64`). `runtime_certs.py` decodes them to `/tmp` with mode 0600 on cold start. Root, intermediate and OCSP-signer keys never leave the developer's laptop. |
 | Database | Neon Postgres from the Vercel Marketplace (`DATABASE_URL`) |
 | Sessions | `FLASK_SECRET_KEY` is required; the app refuses to start on Vercel without it |
+| Idle sign-out | A session ends after `SESSION_IDLE_MINUTES` without activity, 15 by default. The page warns a minute before and can hold the session open; the server enforces the deadline either way |
 | UniCredit redirect | `REDIRECT_URI=auto` builds `https://<current host>/callback`, so the flow works on any domain attached to the project |
 | Model | `ANTHROPIC_API_KEY`, `LLM_MODEL=claude-haiku-4-5`, `LLM_MAX_CALLS`, `CATEGORISE_LIMIT`, `EVAL_SAMPLE`, `SYNC_CATEGORISE_LIMIT` |
-| Event log | Upstash Redis (`KV_REST_API_URL`, `KV_REST_API_TOKEN`); without it, events go to the Vercel runtime log |
+| Hosts | One deployment serves 2 hostnames. `OPS_HOST` serves only the operations view; every other host serves only the product. Unset locally, so `/ops` works on one host |
+| Event log | The `event_log` table in Postgres (`EVENT_LOG_BACKEND=db`), newest 2,000 events kept. Upstash Redis is used instead when `KV_REST_API_URL` and `KV_REST_API_TOKEN` are set |
 | `.vercelignore` | Keeps `.env`, `certs/`, local databases, spikes and certificate tooling out of the bundle |
 
 ### Daily jobs
@@ -219,7 +234,7 @@ Seeding is re-runnable: it only creates missing users, customers and history.
 | 03:00 | `/cron/evaluate` | Builds the day's Langfuse dataset and runs one experiment on it |
 | 04:00 | `/cron/health` | CRL next update, OCSP status of the UniCredit certificate, certificate expiry |
 
-Vercel Hobby runs each job once a day, somewhere within the scheduled hour. Every route requires `Authorization: Bearer $CRON_SECRET`, runs once per date (the `job_runs` table; add `?force=1` to rerun) and reports on the Ops page.
+Vercel Hobby runs each job once a day, somewhere within the scheduled hour. Every route requires `Authorization: Bearer $CRON_SECRET`, runs once per date (the `job_runs` table; add `?force=1` to rerun) and reports on the operations view.
 
 ```bash
 curl -H "Authorization: Bearer $CRON_SECRET" https://bank-connectivity.vercel.app/cron/status
@@ -286,7 +301,7 @@ So the leaf certificate points at OCSP and CRL endpoints this project runs over 
 - Both endpoints run on one Always Free Oracle Cloud VM: `openssl ocsp` as the signing backend behind a small standard-library Python proxy on port 80 that serves the CRL and issuer certificate. Both run as systemd services.
 - `refresh_crl.py` re-signs the CRL (valid for 30 days) and `deploy_crl.sh` copies it to the VM. Run both monthly.
 
-The bank imports `chain.crt` once; later leaf certificates under the same intermediate need no new trust. Vercel cannot serve these endpoints because it forces HTTPS. The `/cron/health` job and the Ops page check the CRL, OCSP and certificate expiry every day.
+The bank imports `chain.crt` once; later leaf certificates under the same intermediate need no new trust. Vercel cannot serve these endpoints because it forces HTTPS. The `/cron/health` job and the operations view check the CRL, OCSP and certificate expiry every day.
 
 ---
 
@@ -295,7 +310,7 @@ The bank imports `chain.crt` once; later leaf certificates under the same interm
 | Layer | Where | Contains |
 |---|---|---|
 | Application log | `logs/fintnet.json` locally (rotated at 10 MB, 5 backups), the Vercel runtime log in production | One JSON object per line: `auth.*`, `connection.upsert`, `connection.disconnect`, `sync.complete` with `latency_ms`, `sync.account.skipped`, `sync.owner_name.skipped`, `categorize.model.failed`, `currency.fetch_failed`, `cron.failed`, `unicredit.gateway_session` |
-| Event log | `eventlog.py`: `logs/events.jsonl` locally, Upstash Redis on Vercel | Every assistant request, tool call, model call, job run and score, in Splunk HTTP Event Collector format. Set `SPLUNK_HEC_URL` and `SPLUNK_HEC_TOKEN` to send the same lines to Splunk |
+| Event log | `eventlog.py`: `logs/events.jsonl` locally, Postgres on Vercel | Every bank API call (bank, method, host, path, status, latency), assistant request, tool call, model call, job run and score, in Splunk HTTP Event Collector format. `spl.py` searches it from the operations view. Set `SPLUNK_HEC_URL` and `SPLUNK_HEC_TOKEN` to send the same lines to Splunk |
 | Traces | Langfuse (`observability.py`) | Model generations with tokens, tool spans, scores, datasets and experiment runs, with IBANs masked |
 
 ---
@@ -313,10 +328,11 @@ The bank imports `chain.crt` once; later leaf certificates under the same interm
 | `llm.py` | The only Claude call site: model, call cap, errors, tracing |
 | `assistant.py` | `/ask` tools, tool loop and refusal |
 | `categorize.py` | Categorisation waterfall and provisional upgrades |
-| `evaluate.py`, `evals/` | Daily categoriser evaluation, benchmark and assistant experiments, judge |
+| `evaluate.py`, `evals/` | Daily categoriser evaluation, benchmark and assistant experiments, held-out question sets, judge, human review queue |
+| `eventlog.py`, `spl.py` | Event log and its SPL-style search |
 | `cron.py` | Daily job routes |
 | `health.py` | CRL, OCSP and certificate checks |
-| `observability.py`, `eventlog.py`, `logging_config.py` | Langfuse, event log, application log |
+| `observability.py`, `logging_config.py` | Langfuse, application log |
 | `currency_utils.py` | ECB exchange rates |
 | `runtime_certs.py` | Certificates from env vars on Vercel |
 | `seed_data.py` | Demo logins, generated customers, `--reset-demo` |
@@ -332,7 +348,7 @@ The bank imports `chain.crt` once; later leaf certificates under the same interm
 - **More banks** through one Berlin Group NextGenPSD2 adapter driven by a bank registry (Santander, BNP Paribas, BBVA), keeping bespoke clients only for banks that differ from the standard.
 - **Consent lifecycle:** token refresh, expiry detection with a reconnect prompt, and renewal before the 180-day window ends.
 - **MCP server** exposing accounts, transactions and recurring payments as tools for Claude Desktop and Claude Code.
-- **Separate Langfuse project** for FintNet traces and evaluations.
+- **Judge agreement:** measure how often the LLM judge agrees with human reviews from the Langfuse annotation queue.
 
 ---
 

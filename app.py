@@ -39,7 +39,7 @@ from statistics import mean, median
 from urllib.parse import parse_qs, urlparse
 
 from dotenv import load_dotenv
-from flask import Flask, abort, flash, redirect, render_template, request, session, url_for
+from flask import Flask, abort, flash, jsonify, redirect, render_template, request, session, url_for
 from markupsafe import Markup, escape
 from flask_login import LoginManager, current_user, login_required, login_user, logout_user
 from werkzeug.security import check_password_hash, generate_password_hash
@@ -63,7 +63,6 @@ import ing_client  # noqa: E402
 import llm  # noqa: E402
 import observability  # noqa: E402
 import nordea_client  # noqa: E402
-import pm_content  # noqa: E402
 import psd2_client  # noqa: E402
 import synthbank_client  # noqa: E402
 from logging_config import log  # noqa: E402
@@ -529,6 +528,21 @@ if os.getenv("VERCEL") and not os.getenv("FLASK_SECRET_KEY"):
 app.secret_key = os.getenv("FLASK_SECRET_KEY", "dev-secret")
 app.config["SESSION_COOKIE_SECURE"] = bool(os.getenv("VERCEL"))
 app.config["SESSION_COOKIE_SAMESITE"] = "Lax"
+# Sign a user out once they stop using the app. The window slides: every request
+# restamps it, and the page restamps it on its own while someone is working, so
+# it runs down only when the app is sitting untouched.
+# The regulated figure for an authenticated payment-account session is 5 minutes
+# without activity (SCA-RTS (EU) 2018/389, Article 4(3)(d)). That article binds
+# the bank rather than a third-party provider, so the default here is longer;
+# SESSION_IDLE_MINUTES sets it, and 5 makes the app follow the bank's rule.
+IDLE_MINUTES = max(1, int(os.getenv("SESSION_IDLE_MINUTES", "15")))
+IDLE_WARN_SECONDS = 60
+# The signed cookie outlives the window by 2 minutes on purpose. Flask rejects an
+# expired cookie silently, which would land the user on a bare sign-in page; the
+# stamp inside the session runs out first, so the app can say why it signed them
+# out. The cookie is the backstop for a browser that keeps one past its expiry.
+app.permanent_session_lifetime = timedelta(minutes=IDLE_MINUTES + 2)
+app.config["SESSION_REFRESH_EACH_REQUEST"] = True
 app.config["SANDBOX_BASE_URL"]        = os.getenv("SANDBOX_BASE_URL",     "https://api-sandbox.unicredit.it")
 app.config["REDIRECT_URI"]            = os.getenv("REDIRECT_URI",        "http://localhost:5000/callback")
 app.config["CB_REDIRECT_URI"]         = os.getenv("CB_REDIRECT_URI",     "http://localhost:5000/commerzbank/callback")
@@ -564,16 +578,14 @@ def load_user(user_id):
 # templates use it only to label the synthetic bank data honestly.
 IS_HOSTED = bool(os.getenv("VERCEL"))
 
-# The product and the two internal views are one app on three hostnames.
-# OPS_HOST serves only the operations view, PM_HOST only the product-management
-# view, and every other host only the product itself. Unset (local development)
-# means one host serves all three, reachable at /ops and /pm.
+# The product and the operations view are one app on two hostnames.
+# OPS_HOST serves only the operations view, and every other host only the
+# product itself. Unset (local development) means one host serves both, with
+# the operations view at /ops.
 OPS_HOST = (os.getenv("OPS_HOST") or "").lower()
-PM_HOST = (os.getenv("PM_HOST") or "").lower()
 PRODUCT_URL = os.getenv("PRODUCT_URL", "https://fintnet.ai")
-# Endpoints each internal host serves; everything else there goes to the product.
+# Endpoints the operations host serves; everything else there goes to the product.
 _OPS_ENDPOINTS = {"ops", "login", "logout", "signup", "static"}
-_PM_ENDPOINTS = {"pm", "login", "logout", "signup", "static"}
 
 
 def _host() -> str:
@@ -584,13 +596,47 @@ def _on_ops_host() -> bool:
     return bool(OPS_HOST) and _host() == OPS_HOST
 
 
-def _on_pm_host() -> bool:
-    return bool(PM_HOST) and _host() == PM_HOST
-
-
 @app.before_request
 def _start_timer():
     request.environ["_started"] = time.time()
+
+
+# Nobody is sitting at a keyboard on these: the sign-in pages belong to a user
+# who has no session yet, and the crons are Vercel calling with a bearer token.
+_IDLE_EXEMPT = {"login", "logout", "signup", "static"}
+
+
+@app.before_request
+def _expire_idle_session():
+    """End a session that has gone quiet for longer than IDLE_MINUTES.
+
+    The stamp lives inside the session cookie, which Flask signs, so a browser
+    cannot push its own deadline out. Reaching the deadline clears the session
+    and says so, rather than letting the next click land on an unexplained
+    sign-in page.
+    """
+    endpoint = (request.endpoint or "").split(".")[0]
+    if endpoint in _IDLE_EXEMPT or endpoint == "cron" or not current_user.is_authenticated:
+        return None
+    now = int(time.time())
+    last_seen = session.get("last_seen")
+    if last_seen is not None and now - last_seen > IDLE_MINUTES * 60:
+        user_id = current_user.id
+        session.clear()
+        logout_user()
+        log.info("auth.logout.idle", extra={"event": "auth.logout.idle", "user_id": user_id,
+                                            "idle_minutes": IDLE_MINUTES,
+                                            "idle_seconds": now - last_seen,
+                                            "endpoint": request.endpoint})
+        flash(f"Signed out after {IDLE_MINUTES} minutes without activity.", "info")
+        # Send them back to the page they asked for once they sign in again.
+        target = request.full_path.rstrip("?") if request.method == "GET" else ""
+        if not target.startswith("/") or target.startswith("//"):
+            target = ""
+        return redirect(url_for("login", next=target or None))
+    session["last_seen"] = now
+    session.permanent = True     # also upgrades a session minted before this existed
+    return None
 
 
 @app.after_request
@@ -604,29 +650,24 @@ def _log_request(response):
             "latency_ms": int((time.time() - request.environ.get("_started", time.time())) * 1000),
             "user_id": getattr(current_user, "id", None) if current_user else None,
             "host": _host(),
-            "view": "ops" if _on_ops_host() else ("pm" if _on_pm_host() else "product"),
+            "view": "ops" if _on_ops_host() else "product",
         })
     return response
 
 
 @app.before_request
 def _split_product_and_ops():
-    """Keep the three views apart. An internal host serves its own view, its
+    """Keep the two views apart. The operations host serves its own view, its
     sign-in pages and the crons, and sends anything else to the product. The
-    product host serves neither internal view once their hostnames exist."""
+    product host does not serve the operations view once its hostname exists."""
     endpoint = (request.endpoint or "").split(".")[0]
-    for on_host, home, served in ((_on_ops_host(), "ops", _OPS_ENDPOINTS),
-                                  (_on_pm_host(), "pm", _PM_ENDPOINTS)):
-        if not on_host:
-            continue
-        if endpoint == "index":            # an internal host opens on its own view
-            return redirect(url_for(home))
-        if endpoint and endpoint not in served and not endpoint.startswith("cron"):
+    if _on_ops_host():
+        if endpoint == "index":            # the operations host opens on its own view
+            return redirect(url_for("ops"))
+        if endpoint and endpoint not in _OPS_ENDPOINTS and not endpoint.startswith("cron"):
             return redirect(PRODUCT_URL)
         return None
     if OPS_HOST and endpoint == "ops":
-        abort(404)
-    if PM_HOST and endpoint == "pm":
         abort(404)
 
 
@@ -654,8 +695,9 @@ app.jinja_env.tests["generated"] = lambda account: bool(account and (account.res
 @app.context_processor
 def inject_flags():
     return {"is_hosted": IS_HOSTED, "assistant_enabled": llm.available(),
-            "ops_view": _on_ops_host(), "pm_view": _on_pm_host(),
-            "product_url": PRODUCT_URL, "bank_colors": BANK_COLORS}
+            "ops_view": _on_ops_host(),
+            "product_url": PRODUCT_URL, "bank_colors": BANK_COLORS,
+            "idle_seconds": IDLE_MINUTES * 60, "idle_warn_seconds": IDLE_WARN_SECONDS}
 
 
 app.register_blueprint(cron.bp)
@@ -1037,7 +1079,7 @@ def login():
         return redirect(url_for("ops"))
     if current_user.is_authenticated and request.method == "GET":
         # Show the form instead of bouncing home, so a viewer can switch persona.
-        return render_template("login.html", demo_users=[] if (_on_ops_host() or _on_pm_host()) else DEMO_LOGIN,
+        return render_template("login.html", demo_users=[] if _on_ops_host() else DEMO_LOGIN,
                                demo_password=DEMO_PASSWORD, signed_in_as=current_user.email)
     if request.method == "POST":
         email    = request.form.get("email", "").strip().lower()
@@ -1048,6 +1090,8 @@ def login():
             logout_user()
             session.clear()     # never carry one account's session into another
             login_user(user)
+            session.permanent = True                 # the idle window runs from here
+            session["last_seen"] = int(time.time())
             session["sid"] = uuid.uuid4().hex[:16]   # groups this visit's questions in Langfuse
             user.last_login_at = datetime.now(timezone.utc)
             db.session.commit()
@@ -1055,13 +1099,12 @@ def login():
                                                   "user_id": user.id, "email": email,
                                                   "switched_from": previous})
             # On the operations host the product pages are elsewhere: land on the view itself.
-            default = (url_for("ops") if _on_ops_host()
-                       else url_for("pm") if _on_pm_host() else url_for("index"))
+            default = url_for("ops") if _on_ops_host() else url_for("index")
             return redirect(request.args.get("next") or default)
         # Don't tell the attacker which half was wrong.
         log.warning("auth.login.failed", extra={"event": "auth.login.failed", "email": email})
         flash("Invalid email or password.", "error")
-    return render_template("login.html", demo_users=[] if (_on_ops_host() or _on_pm_host()) else DEMO_LOGIN,
+    return render_template("login.html", demo_users=[] if _on_ops_host() else DEMO_LOGIN,
                            demo_password=DEMO_PASSWORD,
                            signed_in_as=current_user.email if current_user.is_authenticated else None)
 
@@ -1096,6 +1139,8 @@ def signup():
             db.session.add(user)
             db.session.commit()
             login_user(user)
+            session.permanent = True
+            session["last_seen"] = int(time.time())
             log.info("auth.signup", extra={"event": "auth.signup",
                                            "user_id": user.id, "email": email})
             flash("Account created. Welcome!", "success")
@@ -1104,14 +1149,38 @@ def signup():
 
 
 @app.route("/logout")
-@login_required
 def logout():
     """Clear both the session and flask-login's user_id cookie.
-    `session.clear()` alone leaves flask-login state intact."""
-    log.info("auth.logout", extra={"event": "auth.logout", "user_id": current_user.id})
+    `session.clear()` alone leaves flask-login state intact.
+
+    `?reason=idle` is the page signing itself out at the end of the countdown,
+    a second or two before the server would have done it. This route takes a
+    visitor who no longer has a session, because with a second tab open that
+    countdown can arrive just after the server has ended it, and the reason is
+    worth more to that visitor than a bare sign-in page.
+    """
+    idle = request.args.get("reason") == "idle"
+    if current_user.is_authenticated:
+        log.info("auth.logout", extra={"event": "auth.logout.idle" if idle else "auth.logout",
+                                       "user_id": current_user.id})
     session.clear()
     logout_user()
+    if idle:
+        flash(f"Signed out after {IDLE_MINUTES} minutes without activity.", "info")
     return redirect(url_for("login"))
+
+
+@app.route("/session/keepalive", methods=["POST"])
+@login_required
+def keepalive():
+    """The page reporting that someone is still using it.
+
+    `_expire_idle_session` has already restamped the session by the time this
+    runs, so the body only has to tell the page how long the fresh window is.
+    An idle session never gets here: the gate redirects it to the sign-in page,
+    and the page reads that redirect as the sign-out it is.
+    """
+    return jsonify({"idle_seconds": IDLE_MINUTES * 60})
 
 
 # ── Analytics ────────────────────────────────────────────────────────────────
@@ -1829,28 +1898,6 @@ def ask_feedback():
                                               "trace_id": trace_id, "useful": useful})
         flash("Thanks: your verdict is recorded against this answer's trace.", "success")
     return redirect(url_for("ask"))
-
-
-_PM_TABS = (("market", "Market"), ("competitors", "Competitors"),
-            ("vop", "Account verification"), ("roadmap", "Roadmap"), ("slides", "Slides"))
-
-
-@app.route("/pm")
-@login_required
-def pm():
-    """The product-management view: market read, competitor landscape, roadmap
-    and the panel deck.
-
-    Same guard as /ops, and on PM_HOST it is the only page served. The content
-    is authored in pm_content.py rather than stored, because it is written
-    rather than collected.
-    """
-    if current_user.role != "tpp_admin":
-        abort(404)
-    tab = request.args.get("tab", "market")
-    if tab not in dict(_PM_TABS):
-        tab = "market"
-    return render_template("pm.html", tab=tab, tabs=_PM_TABS, c=pm_content)
 
 
 @app.route("/ops")

@@ -477,8 +477,26 @@
       .card, .nav-pill, .seg-btn { border-width: 1px; }
       :focus-visible { outline-width: 3px; }
     }
+    /* ── Idle sign-out warning ───────────────────────────
+       A native <dialog> so the last minute of a session traps focus and
+       cannot be clicked past, the way the decision deserves. */
+    .idle-dialog {
+      border: 1px solid var(--border); border-radius: var(--radius);
+      padding: var(--s-6); max-width: 24rem; width: calc(100% - 2rem);
+      background: var(--surface); color: var(--text);
+      box-shadow: var(--shadow-lg);
+    }
+    .idle-dialog::backdrop { background: rgba(15,23,42,.45); }
+    .idle-dialog h2 {
+      font-family: var(--font-display); font-size: 1.125rem;
+      font-weight: 600; margin-bottom: var(--s-2);
+    }
+    .idle-dialog p { color: var(--text-2); font-size: .9375rem; }
+    .idle-count { font-variant-numeric: tabular-nums; font-weight: 600; color: var(--text); }
+    .idle-actions { display: flex; gap: var(--s-3); margin-top: var(--s-5); }
+
     @media print {
-      .topnav, .skip-link, .seg, .crumbs { display: none !important; }
+      .topnav, .skip-link, .seg, .crumbs, .idle-dialog { display: none !important; }
       .page { max-width: none; padding: 0; }
       .card { box-shadow: none; break-inside: avoid; }
     }
@@ -490,14 +508,14 @@
 
 <nav class="topnav" aria-label="Primary">
   <div class="topnav-inner">
-    <a class="nav-logo" href="{{ product_url if (ops_view or pm_view) else url_for('index') }}">
+    <a class="nav-logo" href="{{ product_url if ops_view else url_for('index') }}">
       <div class="nav-logo-icon" aria-hidden="true">FN</div>
       <div class="nav-logo-text">
         <div class="nav-logo-name">FintNet</div>
-        <div class="nav-logo-sub">{% if ops_view %}Operations{% elif pm_view %}Product{% else %}Bank Integrations{% endif %}</div>
+        <div class="nav-logo-sub">{% if ops_view %}Operations{% else %}Bank Integrations{% endif %}</div>
       </div>
     </a>
-    {% if current_user.is_authenticated and not ops_view and not pm_view %}
+    {% if current_user.is_authenticated and not ops_view %}
     <div class="nav-divider"></div>
     {# `nav_section` lets a sub-page (an account's balances, say) light up
        the section it belongs to. Pages that don't set it fall back to
@@ -509,8 +527,7 @@
       <a href="{{ url_for('spending') }}" {% if here == 'spending' %}class="active" aria-current="page"{% endif %}>Spending</a>
       <a href="{{ url_for('recurring') }}" {% if here == 'recurring' %}class="active" aria-current="page"{% endif %}>Recurring</a>
       <a href="{{ url_for('ask') }}" {% if here == 'ask' %}class="active" aria-current="page"{% endif %}>Ask</a>
-      {% if current_user.role == 'tpp_admin' %}<a href="{{ url_for('ops') }}" {% if here == 'ops' %}class="active" aria-current="page"{% endif %}>Ops</a>
-      <a href="{{ url_for('pm') }}" {% if here == 'pm' %}class="active" aria-current="page"{% endif %}>Product</a>{% endif %}
+      {% if current_user.role == 'tpp_admin' %}<a href="{{ url_for('ops') }}" {% if here == 'ops' %}class="active" aria-current="page"{% endif %}>Ops</a>{% endif %}
       <a href="{{ url_for('index') }}" {% if here == 'index' %}class="active" aria-current="page"{% endif %}>Banks</a>
     </div>
     {% elif ops_view %}
@@ -518,12 +535,6 @@
     <div class="nav-links">
       <span class="nav-current" aria-current="page">Operations</span>
       <a href="{{ product_url }}">Product <span aria-hidden="true">↗</span></a>
-    </div>
-    {% elif pm_view %}
-    <div class="nav-divider"></div>
-    <div class="nav-links">
-      <span class="nav-current" aria-current="page">Product</span>
-      <a href="{{ product_url }}">App <span aria-hidden="true">↗</span></a>
     </div>
     {% endif %}
     <div class="nav-spacer"></div>
@@ -559,6 +570,108 @@
 
   {% block content %}{% endblock %}
 </main>
+
+{% if current_user.is_authenticated %}
+<dialog id="idle-dialog" class="idle-dialog" aria-labelledby="idle-title">
+  <h2 id="idle-title">Are you still there?</h2>
+  <p>FintNet has been idle. This session closes in
+    <span class="idle-count" id="idle-countdown">{{ idle_warn_seconds }}</span> seconds,
+    and your accounts will need a fresh sign-in.</p>
+  <div class="idle-actions">
+    <button type="button" class="btn btn-primary" id="idle-stay" autofocus>Stay signed in</button>
+    <a class="btn btn-secondary" href="{{ url_for('logout') }}">Log out now</a>
+  </div>
+</dialog>
+
+<script>
+  // Auto sign-out, page side. The server owns the deadline and enforces it on
+  // its own; this keeps the page honest about it — restamping the session while
+  // someone is working, and asking before the last minute runs out instead of
+  // dropping them on a sign-in page mid-sentence.
+  (function () {
+    var WINDOW_MS = {{ idle_seconds }} * 1000;
+    var WARN_MS   = {{ idle_warn_seconds }} * 1000;
+    // The server stamped the session when it started this response. Finish a few
+    // seconds early so the page always acts before the server does and the user
+    // gets the dialog rather than a redirect.
+    var MARGIN_MS = 5000;
+    var dialog    = document.getElementById('idle-dialog');
+    var countdown = document.getElementById('idle-countdown');
+    if (!dialog || !dialog.showModal) return;   // no dialog here: the server still expires the session
+
+    // One session, however many tabs. Every tab writes the moment it last
+    // reached the server here and reads every tab's writes back, so a tab left
+    // open on another screen counts the same window as the one being used and
+    // cannot sign the other one out. A browser that refuses storage falls back
+    // to what this tab alone knows.
+    var KEY    = 'fintnet:last-seen';
+    var pinged = Date.now();
+    var warning = false;
+
+    function stamp() {
+      pinged = Date.now();
+      try { localStorage.setItem(KEY, String(pinged)); } catch (e) { /* storage refused */ }
+    }
+    function lastSeen() {
+      try { return Number(localStorage.getItem(KEY)) || pinged; } catch (e) { return pinged; }
+    }
+    function remaining() { return lastSeen() + WINDOW_MS - MARGIN_MS - Date.now(); }
+
+    function expire() { location.href = '{{ url_for("logout") }}?reason=idle'; }
+
+    function ping() {
+      stamp();   // before the call, so a second tab does not fire its own
+      return fetch('{{ url_for("keepalive") }}', { method: 'POST', credentials: 'same-origin' })
+        .then(function (r) {
+          // The gate answers an expired session with a redirect to the sign-in page.
+          if (!r.ok || r.redirected) { expire(); return; }
+          stamp();
+        })
+        .catch(function () { /* offline: the server still holds the real deadline */ });
+    }
+
+    stamp();   // this page load reached the server
+
+    // Working the page counts as activity. One call a minute is enough to hold a
+    // long window open, and a quarter of a short one keeps the same headroom
+    // when SESSION_IDLE_MINUTES is turned down. Once the dialog is up it stops
+    // counting: that question wants an answer, not a mouse passing over the
+    // button on its way somewhere else.
+    var PING_EVERY = Math.min(60000, WINDOW_MS / 4);
+    function activity() {
+      if (!warning && Date.now() - lastSeen() > PING_EVERY) ping();
+    }
+    ['pointerdown', 'keydown', 'wheel', 'touchstart'].forEach(function (evt) {
+      addEventListener(evt, activity, { passive: true });
+    });
+
+    document.getElementById('idle-stay').addEventListener('click', function () {
+      warning = false;
+      dialog.close();
+      ping();
+    });
+    // Escape is not an answer.
+    dialog.addEventListener('cancel', function (e) { e.preventDefault(); });
+
+    setInterval(function () {
+      var left = remaining();
+      if (left <= 0) { expire(); return; }
+      if (left > WARN_MS) {
+        // Another tab reached the server: the question has answered itself.
+        if (warning) { warning = false; dialog.close(); }
+        return;
+      }
+      countdown.textContent = Math.ceil(left / 1000);
+      if (!warning) { warning = true; dialog.showModal(); }
+    }, 1000);
+
+    // A sleeping laptop wakes past the deadline with no tick in between.
+    addEventListener('visibilitychange', function () {
+      if (document.visibilityState === 'visible' && remaining() <= 0) expire();
+    });
+  })();
+</script>
+{% endif %}
 
 <script>
   // Progressive enhancement only — every page works without this file.
