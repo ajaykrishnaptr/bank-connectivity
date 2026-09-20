@@ -237,7 +237,7 @@ Seeding is re-runnable: it only creates missing users, customers and history.
 Vercel Hobby runs each job once a day, somewhere within the scheduled hour. Every route requires `Authorization: Bearer $CRON_SECRET`, runs once per date (the `job_runs` table; add `?force=1` to rerun) and reports on the operations view.
 
 ```bash
-curl -H "Authorization: Bearer $CRON_SECRET" https://bank-connectivity.vercel.app/cron/status
+curl -H "Authorization: Bearer $CRON_SECRET" https://fintnet.ai/cron/status
 ```
 
 ---
